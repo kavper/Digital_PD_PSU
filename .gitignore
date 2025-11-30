@@ -1,0 +1,8 @@
+build
+mx.scratch
+!.settingsbuild/
+cmake/
+.settings/
+*.elf
+*.o
+*.d
