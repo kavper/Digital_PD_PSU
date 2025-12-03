@@ -108,7 +108,7 @@ int main(void)
   MX_I2C1_Init();
   /* USER CODE BEGIN 2 */
 
-  APP_Init();
+  // APP_Init();
   /* USER CODE END 2 */
 
   /* USBPD initialisation ---------------------------------*/

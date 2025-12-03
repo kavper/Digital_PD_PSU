@@ -29,6 +29,8 @@ uint8_t protection_tripped = 0; // Flaga błędu
 extern ADC_HandleTypeDef hadc1;
 extern HRTIM_HandleTypeDef hhrtim1;
 
+bool initialized = false;
+
 float APP_GetCurrentSetpoint() { return current_setpoint; }
 float APP_GetVIn() { return v_in; }
 float APP_GetVOut() { return v_out; }
@@ -36,7 +38,7 @@ float APP_GetIOut() { return i_out; }
 float APP_GetVBoost() { return v_boost; }
 float APP_GetIIn() { return i_in; }
 float APP_GetPWM() {
-  return hhrtim1.Instance->sTimerxRegs[HRTIM_TIMERINDEX_TIMER_D].CMP1xR;
+  return (float) hhrtim1.Instance->sTimerxRegs[HRTIM_TIMERINDEX_TIMER_D].CMP1xR / (float) HRTIM_PERIOD;
 }
 
 // Funkcja pomocnicza do bezpiecznego ograniczenia zakresu (Clamp)
@@ -50,24 +52,25 @@ float clamp(float value, float min, float max) {
 
 void APP_Init() {
   HAL_HRTIM_WaveformCounterStart(&hhrtim1, HRTIM_TIMERID_TIMER_D);
-  HAL_HRTIM_WaveformOutputStart(&hhrtim1, HRTIM_OUTPUT_TD1 | HRTIM_OUTPUT_TD2);
-
-  // Włączenie drivera
-  HAL_GPIO_WritePin(DRV_EN_GPIO_Port, DRV_EN_Pin, GPIO_PIN_SET);
+  HAL_HRTIM_WaveformOutputStart(&hhrtim1, HRTIM_OUTPUT_TD1 | HRTIM_OUTPUT_TD2); 
 
   // Kalibracja ADC (Dla lepszej precyzji)
   HAL_ADCEx_Calibration_Start(&hadc1, ADC_SINGLE_ENDED);
 
-  TCPP_SetPDOSelectionMethod(PDO_SEL_METHOD_MAX_PWR);
-
   GUI_Init();
 
+  TCPP_SetPDOSelectionMethod(PDO_SEL_METHOD_MAX_PWR);
   TCPP_Init();
+
+  // Włączenie drivera
+  HAL_GPIO_WritePin(DRV_EN_GPIO_Port, DRV_EN_Pin, 1);
 }
 
 void APP_Run() {
-
-  // HAL_GPIO_TogglePin(LED_GPIO_Port, LED_Pin);
+  if (!initialized) {
+    APP_Init();
+    initialized = true;
+  }
 
   // --- 1. ODCZYT ADC (Jak najszybciej) ---
   HAL_ADC_Start(&hadc1);
