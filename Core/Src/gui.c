@@ -52,14 +52,14 @@ void GUI_Update() {
              (int)v_in, (int)((v_in - (int)v_in) * 100));
     ssd1306_WriteString(buf, Font_6x8, White);
 
-    // przesunięcie X na koniec Vin + odstęp 5px
-    int x_offset = strlen(buf) * 6 + 5; // Font_6x8 szerokość znaku ~6px
+    // przesunięcie X
+    int x_offset = strlen(buf) * 6 + 5;
     ssd1306_SetCursor(x_offset, 25);
     snprintf(buf, sizeof(buf), "Ii:%d.%02dA",
              (int)i_in, (int)((i_in - (int)i_in) * 100));
     ssd1306_WriteString(buf, Font_6x8, White);
 
-    // Pin pod spodem
+    // Pin
     ssd1306_SetCursor(0, 40);
     snprintf(buf, sizeof(buf), "Pi:%d.%02dW",
              (int)p_in, (int)((p_in - (int)p_in) * 100));
@@ -70,7 +70,7 @@ void GUI_Update() {
     float i_out = APP_GetIOut();
     float p_out = v_out * i_out;
 
-    // Vout i Iout w jednej linii
+    // Vout + Iout
     ssd1306_SetCursor(0, 55);
     snprintf(buf, sizeof(buf), "Vo:%d.%02dV",
              (int)v_out, (int)((v_out - (int)v_out) * 100));
@@ -82,7 +82,7 @@ void GUI_Update() {
              (int)i_out, (int)((i_out - (int)i_out) * 100));
     ssd1306_WriteString(buf, Font_6x8, White);
 
-    // Pout pod spodem
+    // Pout
     ssd1306_SetCursor(0, 70);
     snprintf(buf, sizeof(buf), "Po:%d.%02dW",
              (int)p_out, (int)((p_out - (int)p_out) * 100));
@@ -104,9 +104,14 @@ void GUI_Update() {
              (int)((v_boost - (int)v_boost) * 100));
     ssd1306_WriteString(buf, Font_6x8, White);
 
+    // --- PWM (DODANE) ---
+    uint32_t pwm = APP_GetPWM();
+    ssd1306_SetCursor(0, 115);
+    snprintf(buf, sizeof(buf), "PWM:%u", pwm);
+    ssd1306_WriteString(buf, Font_6x8, White);
+
     ssd1306_UpdateScreen();
 }
-
 
 
 

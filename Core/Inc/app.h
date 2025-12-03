@@ -32,6 +32,7 @@ float APP_GetVOut();
 float APP_GetIOut();
 float APP_GetVBoost();
 float APP_GetIIn();
+float APP_GetPWM();
 
 void APP_Init();
 void APP_Run();
