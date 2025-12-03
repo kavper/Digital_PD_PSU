@@ -133,5 +133,5 @@ void APP_Run() {
     last_usb_send = HAL_GetTick();
   }
 
-  // GUI_Process();
+  GUI_Process();
 }

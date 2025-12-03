@@ -19,6 +19,7 @@
         "app.h": "c",
         "usbpd_dpm_conf.h": "c",
         "usbpd_def.h": "c",
-        "ssd1306.h": "c"
+        "ssd1306.h": "c",
+        "cstddef": "c"
     }
 }

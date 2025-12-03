@@ -1,17 +1,10 @@
 #include "ssd1306.h"
+#include "stm32g4xx_hal.h"
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>  // For memcpy
 
 #if defined(SSD1306_USE_I2C)
-
-// Screenbuffer
-static uint8_t SSD1306_Buffer[SSD1306_BUFFER_SIZE];
-
-// Screen object
-static SSD1306_t SSD1306;
-
-static uint8_t updateScreenPageIndex = 0;
 
 void ssd1306_Reset(void) {
     /* for I2C - do nothing */
@@ -19,48 +12,20 @@ void ssd1306_Reset(void) {
 
 // Send a byte to the command register
 void ssd1306_WriteCommand(uint8_t byte) {
-    HAL_I2C_Mem_Write(&SSD1306_I2C_PORT, SSD1306_I2C_ADDR, 0x00, 1, &byte, 1, HAL_MAX_DELAY);
+    HAL_I2C_Mem_Write_DMA(&SSD1306_I2C_PORT, SSD1306_I2C_ADDR, 0x00, 1, &byte, 1);
+    while(HAL_I2C_GetState(&SSD1306_I2C_PORT) != HAL_I2C_STATE_READY);
+    // HAL_Delay(1);
+    // HAL_I2C_Mem_Write(&SSD1306_I2C_PORT, SSD1306_I2C_ADDR, 0x00, 1, &byte, 1, HAL_MAX_DELAY);
 }
 
 // Send data
 void ssd1306_WriteData(uint8_t* buffer, size_t buff_size) {
-    HAL_I2C_Mem_Write(&SSD1306_I2C_PORT, SSD1306_I2C_ADDR, 0x40, 1, buffer, buff_size, HAL_MAX_DELAY);
-	HAL_I2C_Mem_Write_DMA(&SSD1306_I2C_PORT, SSD1306_I2C_ADDR, 0x40, 1, buffer, buff_size);
+    HAL_I2C_Mem_Write_DMA(&SSD1306_I2C_PORT, SSD1306_I2C_ADDR, 0x40, 1, buffer, buff_size);
+    while(HAL_I2C_GetState(&SSD1306_I2C_PORT) != HAL_I2C_STATE_READY);
+    // HAL_Delay(1);
+    // HAL_I2C_Mem_Write(&SSD1306_I2C_PORT, SSD1306_I2C_ADDR, 0x40, 1, buffer, buff_size, HAL_MAX_DELAY);
 }
 
-void ssd1306_UpdatePage(uint8_t pageIndex) {
-	ssd1306_WriteCommand(0xB0 + pageIndex); // Set the current RAM page address.
-	ssd1306_WriteCommand(0x00 + SSD1306_X_OFFSET_LOWER);
-	ssd1306_WriteCommand(0x10 + SSD1306_X_OFFSET_UPPER);
-	ssd1306_WriteData(&SSD1306_Buffer[SSD1306_WIDTH*pageIndex],SSD1306_WIDTH);
-}
-
-/* Write the screenbuffer with changed to the screen */
-void ssd1306_UpdateScreen(void) {
-    // Write data to first page of RAM. Subsequent pages will be triggered
-	// automatically via interrupt callback when each page is completed.
-	// Number of pages depends on the screen height:
-    //
-    //  * 32px   ==  4 pages
-    //  * 64px   ==  8 pages
-    //  * 128px  ==  16 pages
-
-	updateScreenPageIndex = 0;
-	ssd1306_UpdatePage(updateScreenPageIndex);
-}
-
-/* Gets called by HAL when the entire buffer (i.e. one page) is transmitted through DMA */
-void HAL_I2C_MemTxCpltCallback(I2C_HandleTypeDef *hi2c)
-{
-	if (hi2c == &SSD1306_I2C_PORT)
-	{
-		updateScreenPageIndex++;
-		if (updateScreenPageIndex < SSD1306_HEIGHT/8)
-		{
-			ssd1306_UpdatePage(updateScreenPageIndex);
-		}
-	}
-}
 #elif defined(SSD1306_USE_SPI)
 
 void ssd1306_Reset(void) {
@@ -73,24 +38,6 @@ void ssd1306_Reset(void) {
     HAL_GPIO_WritePin(SSD1306_Reset_Port, SSD1306_Reset_Pin, GPIO_PIN_SET);
     HAL_Delay(10);
 }
-
-/* Write the screenbuffer with changed to the screen */
-void ssd1306_UpdateScreen(void) {
-    // Write data to each page of RAM. Number of pages
-    // depends on the screen height:
-    //
-    //  * 32px   ==  4 pages
-    //  * 64px   ==  8 pages
-    //  * 128px  ==  16 pages
-    for(uint8_t i = 0; i < SSD1306_HEIGHT/8; i++) {
-        ssd1306_WriteCommand(0xB0 + i); // Set the current RAM page address.
-        ssd1306_WriteCommand(0x00 + SSD1306_X_OFFSET_LOWER);
-        ssd1306_WriteCommand(0x10 + SSD1306_X_OFFSET_UPPER);
-        ssd1306_WriteData(&SSD1306_Buffer[SSD1306_WIDTH*i],SSD1306_WIDTH);
-    }
-}
-
-
 
 // Send a byte to the command register
 void ssd1306_WriteCommand(uint8_t byte) {
@@ -112,6 +59,12 @@ void ssd1306_WriteData(uint8_t* buffer, size_t buff_size) {
 #error "You should define SSD1306_USE_SPI or SSD1306_USE_I2C macro"
 #endif
 
+
+// Screenbuffer
+static uint8_t SSD1306_Buffer[SSD1306_BUFFER_SIZE];
+
+// Screen object
+static SSD1306_t SSD1306;
 
 /* Fills the Screenbuffer with values from a given buffer of a fixed length */
 SSD1306_Error_t ssd1306_FillBuffer(uint8_t* buf, uint32_t len) {
@@ -230,6 +183,21 @@ void ssd1306_Fill(SSD1306_COLOR color) {
     memset(SSD1306_Buffer, (color == Black) ? 0x00 : 0xFF, sizeof(SSD1306_Buffer));
 }
 
+/* Write the screenbuffer with changed to the screen */
+void ssd1306_UpdateScreen(void) {
+    // Write data to each page of RAM. Number of pages
+    // depends on the screen height:
+    //
+    //  * 32px   ==  4 pages
+    //  * 64px   ==  8 pages
+    //  * 128px  ==  16 pages
+    for(uint8_t i = 0; i < SSD1306_HEIGHT/8; i++) {
+        ssd1306_WriteCommand(0xB0 + i); // Set the current RAM page address.
+        ssd1306_WriteCommand(0x00 + SSD1306_X_OFFSET_LOWER);
+        ssd1306_WriteCommand(0x10 + SSD1306_X_OFFSET_UPPER);
+        ssd1306_WriteData(&SSD1306_Buffer[SSD1306_WIDTH*i],SSD1306_WIDTH);
+    }
+}
 
 /*
  * Draw one pixel in the screenbuffer
