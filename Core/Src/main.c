@@ -1,29 +1,29 @@
 /* USER CODE BEGIN Header */
 /**
-  ******************************************************************************
-  * @file           : main.c
-  * @brief          : Main program body
-  ******************************************************************************
-  * @attention
-  *
-  * Copyright (c) 2025 STMicroelectronics.
-  * All rights reserved.
-  *
-  * This software is licensed under terms that can be found in the LICENSE file
-  * in the root directory of this software component.
-  * If no LICENSE file comes with this software, it is provided AS-IS.
-  *
-  ******************************************************************************
-  */
+ ******************************************************************************
+ * @file           : main.c
+ * @brief          : Main program body
+ ******************************************************************************
+ * @attention
+ *
+ * Copyright (c) 2025 STMicroelectronics.
+ * All rights reserved.
+ *
+ * This software is licensed under terms that can be found in the LICENSE file
+ * in the root directory of this software component.
+ * If no LICENSE file comes with this software, it is provided AS-IS.
+ *
+ ******************************************************************************
+ */
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "usbpd.h"
 #include "usb_device.h"
-#include "usbd_cdc_if.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "app.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -33,30 +33,6 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
-// --- KONFIGURACJA HRTIM ---
-#define HRTIM_PERIOD 54400
-#define PWM_MIN      2720    // 5% (Bezpieczny margines dla Bootstrapu)
-#define PWM_MAX      51680   // 95%
-
-// --- NASTAWY ZASILACZA ---
-#define V_TARGET_VOLTAGE  12.0f   // [V] Docelowe napięcie wyjściowe
-#define SOFT_START_STEP   0.05f   // [V] Krok narastania napięcia na pętlę
-
-// --- ZABEZPIECZENIA ---
-#define OVP_LIMIT         14.5f   // [V] Over Voltage Protection (Wyłączenie)
-#define OCP_LIMIT         10.0f   // [A] Over Current Protection (Wyłączenie)
-#define UVLO_LIMIT        15.0f   // [V] Minimalne napięcie zasilania (V_BOOST) żeby w ogóle startować
-
-// --- NASTAWY REGULATORA PID ---
-// Wartości trzeba dobrać eksperymentalnie, te są "bezpieczne" na start
-#define PID_KP            200.0f  // Wzmocnienie proporcjonalne
-#define PID_KI            10.0f   // Wzmocnienie całkujące
-#define PID_INTEGRAL_MAX  10000.0f // Limit członu całkującego (Anti-windup)
-
-// --- KALIBRACJA ADC ---
-#define COEFF_VOLTAGE  0.008682f
-#define COEFF_CURRENT  0.002442f
 
 /* USER CODE END PD */
 
@@ -70,35 +46,28 @@ ADC_HandleTypeDef hadc1;
 
 HRTIM_HandleTypeDef hhrtim1;
 
+I2C_HandleTypeDef hi2c1;
+DMA_HandleTypeDef hdma_i2c1_rx;
+DMA_HandleTypeDef hdma_i2c1_tx;
+
 /* USER CODE BEGIN PV */
-
-uint16_t adc_raw[5] = {0};
-
-// Zmienne regulatora
-float current_setpoint = 0.0f; // Aktualnie zadane napięcie (do Soft-Startu)
-float pid_integral = 0.0f;     // Pamięć całki
-uint8_t protection_tripped = 0; // Flaga błędu
 
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
+static void MX_DMA_Init(void);
 static void MX_ADC1_Init(void);
 static void MX_HRTIM1_Init(void);
+static void MX_UCPD1_Init(void);
+static void MX_I2C1_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-
-// Funkcja pomocnicza do bezpiecznego ograniczenia zakresu (Clamp)
-float clamp(float value, float min, float max) {
-    if (value < min) return min;
-    if (value > max) return max;
-    return value;
-}
 
 /* USER CODE END 0 */
 
@@ -131,127 +100,33 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+  MX_DMA_Init();
   MX_ADC1_Init();
   MX_HRTIM1_Init();
   MX_USB_Device_Init();
+  MX_UCPD1_Init();
+  MX_I2C1_Init();
   /* USER CODE BEGIN 2 */
-  HAL_HRTIM_WaveformCounterStart(&hhrtim1, HRTIM_TIMERID_TIMER_D);
-  HAL_HRTIM_WaveformOutputStart(&hhrtim1, HRTIM_OUTPUT_TD1 | HRTIM_OUTPUT_TD2);
-  
-  // Włączenie drivera
-  HAL_GPIO_WritePin(DRV_EN_GPIO_Port, DRV_EN_Pin, GPIO_PIN_SET);
-  
-  // Kalibracja ADC (Dla lepszej precyzji)
-  HAL_ADCEx_Calibration_Start(&hadc1, ADC_SINGLE_ENDED);
 
-  char usb_msg[128];
-  uint32_t last_usb_send = 0;
-  uint16_t msg_len;
-  
-  float v_in, v_out, i_out, v_boost, i_in;
-  float pwm_ff, pwm_pid, pwm_total;
-  float error;
-
+  APP_Init();
   /* USER CODE END 2 */
+
+  /* USBPD initialisation ---------------------------------*/
+  MX_USBPD_Init();
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-  while (1)
-  {
+  while (1) {
     /* USER CODE END WHILE */
+    USBPD_DPM_Run();
 
     /* USER CODE BEGIN 3 */
-    // HAL_GPIO_TogglePin(LED_GPIO_Port, LED_Pin);  
-    
-    // --- 1. ODCZYT ADC (Jak najszybciej) ---
-    HAL_ADC_Start(&hadc1);
-    for(int i=0; i<5; i++) {
-        if(HAL_ADC_PollForConversion(&hadc1, 2) == HAL_OK) { // Krótki timeout
-            adc_raw[i] = HAL_ADC_GetValue(&hadc1);
-        }
-    }
-    HAL_ADC_Stop(&hadc1);
 
-    // Przeliczenie na jednostki fizyczne
-    v_in    = (float)adc_raw[0] * COEFF_VOLTAGE;
-    v_out   = (float)adc_raw[1] * COEFF_VOLTAGE;
-    i_out   = (float)adc_raw[2] * COEFF_CURRENT;
-    v_boost = (float)adc_raw[3] * COEFF_VOLTAGE;
-    i_in    = (float)adc_raw[4] * COEFF_CURRENT;
-
-    // --- 2. ZABEZPIECZENIA (Protection) ---
-    if (v_out > OVP_LIMIT || i_out > OCP_LIMIT) {
-        protection_tripped = 1;
-        // Wyłączamy driver i PWM
-        HAL_GPIO_WritePin(DRV_EN_GPIO_Port, DRV_EN_Pin, GPIO_PIN_RESET);
-        HAL_HRTIM_WaveformOutputStop(&hhrtim1, HRTIM_OUTPUT_TD1 | HRTIM_OUTPUT_TD2);
-    }
-
-    // Jeśli zabezpieczenie zadziałało, pomiń regulację
-    if (!protection_tripped) {
-        
-        // --- 3. SOFT START ---
-        // Płynnie podnoś napięcie zadane aż do 12V
-        if (current_setpoint < V_TARGET_VOLTAGE) {
-            current_setpoint += SOFT_START_STEP;
-            if (current_setpoint > V_TARGET_VOLTAGE) current_setpoint = V_TARGET_VOLTAGE;
-        }
-
-        // --- 4. REGULATOR (Feed-Forward + PI) ---
-        
-        // A. Feed-Forward (Zgrubne obliczenie)
-        // D = V_out / V_in -> PWM = (SetPoint / V_Boost) * Period
-        // Zabezpieczenie przed dzieleniem przez zero i zbyt niskim napięciem wejściowym
-        if (v_boost > UVLO_LIMIT) {
-            pwm_ff = (current_setpoint / v_boost) * HRTIM_PERIOD;
-        } else {
-            pwm_ff = PWM_MIN; // Zbyt niskie napięcie zasilania, nie steruj
-            current_setpoint = 0; // Reset soft startu
-        }
-
-        // B. Regulator PI (Korekta błędu)
-        error = current_setpoint - v_out;
-        
-        // Całkowanie
-        pid_integral += (error * PID_KI);
-        // Anti-windup (ograniczenie całki)
-        pid_integral = clamp(pid_integral, -PID_INTEGRAL_MAX, PID_INTEGRAL_MAX);
-        
-        // Obliczenie korekty PI
-        pwm_pid = (error * PID_KP) + pid_integral;
-
-        // C. Sumowanie
-        pwm_total = pwm_ff + pwm_pid;
-
-        // D. Ograniczenia wyjścia (Min/Max Duty Cycle)
-        uint32_t final_compare = (uint32_t)clamp(pwm_total, PWM_MIN, PWM_MAX);
-
-        // --- 5. AKTUALIZACJA PWM ---
-        hhrtim1.Instance->sTimerxRegs[HRTIM_TIMERINDEX_TIMER_D].CMP1xR = final_compare;
-    }
-
-    // --- 6. TELEMETRIA USB (Co 100ms) ---
-    if (HAL_GetTick() - last_usb_send > 100)
-    {
-        HAL_GPIO_TogglePin(LED_GPIO_Port, LED_Pin);
-        
-        if (protection_tripped) {
-            msg_len = sprintf(usb_msg, "PROTECTION TRIP! Reset MCU to restart.\r\n");
-        } else {
-            // Wyświetlanie: Zadane | Vout | Vboost | DutyCycle
-            msg_len = sprintf(usb_msg, 
-                "Set:%d.%02dV | Vout:%d.%02dV | Vbst:%d.%02dV | Iout:%d.%02dA | PWM:%u\r\n",
-                (int)current_setpoint, (int)((current_setpoint - (int)current_setpoint)*100),
-                (int)v_out, (int)((v_out - (int)v_out)*100),
-                (int)v_boost, (int)((v_boost - (int)v_boost)*100),
-                (int)i_out, (int)((i_out - (int)i_out)*100),
-                hhrtim1.Instance->sTimerxRegs[HRTIM_TIMERINDEX_TIMER_D].CMP1xR
-            );
-        }
-        CDC_Transmit_FS((uint8_t*)usb_msg, msg_len);
-        last_usb_send = HAL_GetTick();
-    }
-
+    /*
+     * ---------------------------------------------------
+     * UWAGA! Nie wolno pisać nic w main - to nie zadziała!
+     * ---------------------------------------------------
+     */
   }
   /* USER CODE END 3 */
 }
@@ -541,6 +416,165 @@ static void MX_HRTIM1_Init(void)
 }
 
 /**
+  * @brief I2C1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_I2C1_Init(void)
+{
+
+  /* USER CODE BEGIN I2C1_Init 0 */
+
+  /* USER CODE END I2C1_Init 0 */
+
+  /* USER CODE BEGIN I2C1_Init 1 */
+
+  /* USER CODE END I2C1_Init 1 */
+  hi2c1.Instance = I2C1;
+  hi2c1.Init.Timing = 0x4052060F;
+  hi2c1.Init.OwnAddress1 = 0;
+  hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
+  hi2c1.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
+  hi2c1.Init.OwnAddress2 = 0;
+  hi2c1.Init.OwnAddress2Masks = I2C_OA2_NOMASK;
+  hi2c1.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
+  hi2c1.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
+  if (HAL_I2C_Init(&hi2c1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** Configure Analogue filter
+  */
+  if (HAL_I2CEx_ConfigAnalogFilter(&hi2c1, I2C_ANALOGFILTER_ENABLE) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** Configure Digital filter
+  */
+  if (HAL_I2CEx_ConfigDigitalFilter(&hi2c1, 0) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** I2C Fast mode Plus enable
+  */
+  HAL_I2CEx_EnableFastModePlus(I2C_FASTMODEPLUS_I2C1);
+  /* USER CODE BEGIN I2C1_Init 2 */
+
+  /* USER CODE END I2C1_Init 2 */
+
+}
+
+/**
+  * @brief UCPD1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_UCPD1_Init(void)
+{
+
+  /* USER CODE BEGIN UCPD1_Init 0 */
+
+  /* USER CODE END UCPD1_Init 0 */
+
+  LL_GPIO_InitTypeDef GPIO_InitStruct = {0};
+
+  /* Peripheral clock enable */
+  LL_APB1_GRP2_EnableClock(LL_APB1_GRP2_PERIPH_UCPD1);
+
+  LL_AHB2_GRP1_EnableClock(LL_AHB2_GRP1_PERIPH_GPIOB);
+  /**UCPD1 GPIO Configuration
+  PB4   ------> UCPD1_CC2
+  PB6   ------> UCPD1_CC1
+  */
+  GPIO_InitStruct.Pin = LL_GPIO_PIN_4;
+  GPIO_InitStruct.Mode = LL_GPIO_MODE_ANALOG;
+  GPIO_InitStruct.Pull = LL_GPIO_PULL_NO;
+  LL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+  GPIO_InitStruct.Pin = LL_GPIO_PIN_6;
+  GPIO_InitStruct.Mode = LL_GPIO_MODE_ANALOG;
+  GPIO_InitStruct.Pull = LL_GPIO_PULL_NO;
+  LL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+  /* UCPD1 DMA Init */
+
+  /* UCPD1_RX Init */
+  LL_DMA_SetPeriphRequest(DMA1, LL_DMA_CHANNEL_1, LL_DMAMUX_REQ_UCPD1_RX);
+
+  LL_DMA_SetDataTransferDirection(DMA1, LL_DMA_CHANNEL_1, LL_DMA_DIRECTION_PERIPH_TO_MEMORY);
+
+  LL_DMA_SetChannelPriorityLevel(DMA1, LL_DMA_CHANNEL_1, LL_DMA_PRIORITY_VERYHIGH);
+
+  LL_DMA_SetMode(DMA1, LL_DMA_CHANNEL_1, LL_DMA_MODE_NORMAL);
+
+  LL_DMA_SetPeriphIncMode(DMA1, LL_DMA_CHANNEL_1, LL_DMA_PERIPH_NOINCREMENT);
+
+  LL_DMA_SetMemoryIncMode(DMA1, LL_DMA_CHANNEL_1, LL_DMA_MEMORY_INCREMENT);
+
+  LL_DMA_SetPeriphSize(DMA1, LL_DMA_CHANNEL_1, LL_DMA_PDATAALIGN_BYTE);
+
+  LL_DMA_SetMemorySize(DMA1, LL_DMA_CHANNEL_1, LL_DMA_MDATAALIGN_BYTE);
+
+  /* UCPD1_TX Init */
+  LL_DMA_SetPeriphRequest(DMA1, LL_DMA_CHANNEL_2, LL_DMAMUX_REQ_UCPD1_TX);
+
+  LL_DMA_SetDataTransferDirection(DMA1, LL_DMA_CHANNEL_2, LL_DMA_DIRECTION_MEMORY_TO_PERIPH);
+
+  LL_DMA_SetChannelPriorityLevel(DMA1, LL_DMA_CHANNEL_2, LL_DMA_PRIORITY_VERYHIGH);
+
+  LL_DMA_SetMode(DMA1, LL_DMA_CHANNEL_2, LL_DMA_MODE_NORMAL);
+
+  LL_DMA_SetPeriphIncMode(DMA1, LL_DMA_CHANNEL_2, LL_DMA_PERIPH_NOINCREMENT);
+
+  LL_DMA_SetMemoryIncMode(DMA1, LL_DMA_CHANNEL_2, LL_DMA_MEMORY_INCREMENT);
+
+  LL_DMA_SetPeriphSize(DMA1, LL_DMA_CHANNEL_2, LL_DMA_PDATAALIGN_BYTE);
+
+  LL_DMA_SetMemorySize(DMA1, LL_DMA_CHANNEL_2, LL_DMA_MDATAALIGN_BYTE);
+
+  /* UCPD1 interrupt Init */
+  NVIC_SetPriority(UCPD1_IRQn, NVIC_EncodePriority(NVIC_GetPriorityGrouping(),0, 0));
+  NVIC_EnableIRQ(UCPD1_IRQn);
+
+  /* USER CODE BEGIN UCPD1_Init 1 */
+
+  /* USER CODE END UCPD1_Init 1 */
+  /* USER CODE BEGIN UCPD1_Init 2 */
+
+  /* USER CODE END UCPD1_Init 2 */
+
+}
+
+/**
+  * Enable DMA controller clock
+  */
+static void MX_DMA_Init(void)
+{
+
+  /* DMA controller clock enable */
+  __HAL_RCC_DMAMUX1_CLK_ENABLE();
+  __HAL_RCC_DMA1_CLK_ENABLE();
+
+  /* DMA interrupt init */
+  /* DMA1_Channel1_IRQn interrupt configuration */
+  NVIC_SetPriority(DMA1_Channel1_IRQn, NVIC_EncodePriority(NVIC_GetPriorityGrouping(),0, 0));
+  NVIC_EnableIRQ(DMA1_Channel1_IRQn);
+  /* DMA1_Channel2_IRQn interrupt configuration */
+  NVIC_SetPriority(DMA1_Channel2_IRQn, NVIC_EncodePriority(NVIC_GetPriorityGrouping(),0, 0));
+  NVIC_EnableIRQ(DMA1_Channel2_IRQn);
+  /* DMA1_Channel3_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA1_Channel3_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(DMA1_Channel3_IRQn);
+  /* DMA1_Channel4_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA1_Channel4_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(DMA1_Channel4_IRQn);
+
+}
+
+/**
   * @brief GPIO Initialization Function
   * @param None
   * @retval None
@@ -562,7 +596,7 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(DRV_EN_GPIO_Port, DRV_EN_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOB, DB_Pin|DRV_EN_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin : LED_Pin */
   GPIO_InitStruct.Pin = LED_Pin;
@@ -571,12 +605,12 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(LED_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : DRV_EN_Pin */
-  GPIO_InitStruct.Pin = DRV_EN_Pin;
+  /*Configure GPIO pins : DB_Pin DRV_EN_Pin */
+  GPIO_InitStruct.Pin = DB_Pin|DRV_EN_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(DRV_EN_GPIO_Port, &GPIO_InitStruct);
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
 
@@ -596,8 +630,7 @@ void Error_Handler(void)
   /* USER CODE BEGIN Error_Handler_Debug */
   /* User can add his own implementation to report the HAL error return state */
   __disable_irq();
-  while (1)
-  {
+  while (1) {
   }
   /* USER CODE END Error_Handler_Debug */
 }
@@ -612,8 +645,9 @@ void Error_Handler(void)
 void assert_failed(uint8_t *file, uint32_t line)
 {
   /* USER CODE BEGIN 6 */
-  /* User can add his own implementation to report the file name and line number,
-     ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
+  /* User can add his own implementation to report the file name and line
+     number, ex: printf("Wrong parameters value: file %s on line %d\r\n", file,
+     line) */
   /* USER CODE END 6 */
 }
 #endif /* USE_FULL_ASSERT */

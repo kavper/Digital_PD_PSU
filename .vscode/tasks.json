@@ -1,0 +1,38 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "type": "shell",
+            "label": "Build",
+            "command": "${command:st-stm32-ide-debug-launch.build}",
+            "args": [],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "type": "shell",
+            "label": "Flash",
+            "command": "${command:st-stm32-ide-debug-launch.get-programmer-path}/STM32_Programmer_CLI",
+            "args": [
+                "-c",
+                "port=SWD",
+                "-d",
+                "${command:st-stm32-ide-debug-launch.get-projects-binary-from-context1}",
+                "-hardRst",
+                "-rst",
+                "--start"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": false
+            },
+            "problemMatcher": [],
+            "dependsOn": [
+                "Build"
+            ]
+        }
+    ]
+}

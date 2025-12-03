@@ -8,5 +8,17 @@
         "starm-clangd",
         "--query-driver=${env:CUBE_BUNDLE_PATH}/gnu-tools-for-stm32/13.3.1+st.9/bin/arm-none-eabi-gcc",
         "--query-driver=${env:CUBE_BUNDLE_PATH}/gnu-tools-for-stm32/13.3.1+st.9/bin/arm-none-eabi-g++"
-    ]
+    ],
+    "cmake.preferredGenerators": [
+        "Ninja"
+    ],
+    "files.associations": {
+        "usbd_cdc_if.h": "c",
+        "usbpd_dpm_user.h": "c",
+        "usbpd_vdm_user.h": "c",
+        "app.h": "c",
+        "usbpd_dpm_conf.h": "c",
+        "usbpd_def.h": "c",
+        "ssd1306.h": "c"
+    }
 }
