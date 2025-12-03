@@ -139,26 +139,8 @@ void APP_Run() {
   // --- 6. TELEMETRIA USB (Co 100ms) ---
   if (HAL_GetTick() - last_usb_send > 100) {
     HAL_GPIO_TogglePin(LED_GPIO_Port, LED_Pin);
-
-    if (protection_tripped) {
-      msg_len = sprintf(usb_msg, "PROTECTION TRIP! Reset MCU to restart.\r\n");
-    } else {
-      // Wyświetlanie: Zadane | Vout | Vboost | DutyCycle
-      msg_len = sprintf(
-          usb_msg,
-          "Set:%d.%02dV | Vout:%d.%02dV | Vbst:%d.%02dV | Iout:%d.%02dA | "
-          "PWM:%" PRIu32 "\r\n",
-          (int)current_setpoint,
-          (int)((current_setpoint - (int)current_setpoint) * 100), (int)v_out,
-          (int)((v_out - (int)v_out) * 100), (int)v_boost,
-          (int)((v_boost - (int)v_boost) * 100), (int)i_out,
-          (int)((i_out - (int)i_out) * 100),
-          hhrtim1.Instance->sTimerxRegs[HRTIM_TIMERINDEX_TIMER_D].CMP1xR);
-    }
-    CDC_Transmit_FS((uint8_t *)usb_msg, msg_len);
     last_usb_send = HAL_GetTick();
   }
-
 
 
   GUI_Process();
