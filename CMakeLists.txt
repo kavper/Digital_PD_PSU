@@ -48,6 +48,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/Src/app.c
     Core/Src/tcpp.c
     Core/Src/gui.c
+    Core/Src/pid.c
     
     Drivers/ssd1306/ssd1306.c
     Drivers/ssd1306/ssd1306_fonts.c

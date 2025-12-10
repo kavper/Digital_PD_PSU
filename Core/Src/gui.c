@@ -2,6 +2,7 @@
 #include "gui.h"
 #include "app.h"
 #include "kne.h"
+#include "pid.h"
 
 #include "ssd1306.h"
 #include "ssd1306_fonts.h"
@@ -29,8 +30,8 @@ void GUI_Process() {
 
   if (now - last_tick >= 100) { // 500ms
     last_tick = now;
-    // GUI_Update();
-    UpdateGraph();
+    GUI_Update();
+    // UpdateGraph();
   }
 }
 
@@ -43,13 +44,13 @@ void GUI_Update() {
   ssd1306_WriteString("USB-PD PSU", Font_11x18, White);
 
   // --- Dane wejściowe ---
-  float v_in = APP_GetVIn();
-  float i_in = APP_GetIIn();
+  float v_in = PID_GetVIn();
+  float i_in = PID_GetIIn();
   float p_in = v_in * i_in;
 
   // Vin i Iin w jednej linii
   ssd1306_SetCursor(0, 25);
-  snprintf(buf, sizeof(buf), "Vi:%d.%02dV", (int)v_in,
+  snprintf(buf, sizeof(buf), "Vi:%02d.%02dV", (int)v_in,
            (int)((v_in - (int)v_in) * 100));
   ssd1306_WriteString(buf, Font_6x8, White);
 
@@ -62,49 +63,49 @@ void GUI_Update() {
 
   // Pin
   ssd1306_SetCursor(0, 40);
-  snprintf(buf, sizeof(buf), "Pi:%d.%02dW", (int)p_in,
+  snprintf(buf, sizeof(buf), "Pi:%02d.%02dW", (int)p_in,
            (int)((p_in - (int)p_in) * 100));
   ssd1306_WriteString(buf, Font_6x8, White);
 
   // --- Dane wyjściowe ---
-  float v_out = APP_GetVOut();
-  float i_out = APP_GetIOut();
+  float v_out = PID_GetVOut();
+  float i_out = PID_GetIOut();
   float p_out = v_out * i_out;
 
   // Vout + Iout
   ssd1306_SetCursor(0, 55);
-  snprintf(buf, sizeof(buf), "Vo:%d.%02dV", (int)v_out,
+  snprintf(buf, sizeof(buf), "Vo:%02d.%02dV", (int)v_out,
            (int)((v_out - (int)v_out) * 100));
   ssd1306_WriteString(buf, Font_6x8, White);
 
   x_offset = strlen(buf) * 6 + 5;
   ssd1306_SetCursor(x_offset, 55);
-  snprintf(buf, sizeof(buf), "Io:%d.%02dA", (int)i_out,
+  snprintf(buf, sizeof(buf), "Io:%02d.%02dA", (int)i_out,
            (int)((i_out - (int)i_out) * 100));
   ssd1306_WriteString(buf, Font_6x8, White);
 
   // Pout
   ssd1306_SetCursor(0, 70);
-  snprintf(buf, sizeof(buf), "Po:%d.%02dW", (int)p_out,
+  snprintf(buf, sizeof(buf), "Po:%02d.%02dW", (int)p_out,
            (int)((p_out - (int)p_out) * 100));
   ssd1306_WriteString(buf, Font_6x8, White);
 
   // --- Setpoint ---
-  float current_setpoint = APP_GetCurrentSetpoint();
+  float current_setpoint = PID_GetCurrentSetpoint();
   ssd1306_SetCursor(0, 85);
-  snprintf(buf, sizeof(buf), "Vset:%d.%02dV", (int)current_setpoint,
+  snprintf(buf, sizeof(buf), "Vset:%02d.%02dV", (int)current_setpoint,
            (int)((current_setpoint - (int)current_setpoint) * 100));
   ssd1306_WriteString(buf, Font_6x8, White);
 
   // --- Vboost ---
-  float v_boost = APP_GetVBoost();
+  float v_boost = PID_GetVBoost();
   ssd1306_SetCursor(0, 100);
-  snprintf(buf, sizeof(buf), "Vboost:%d.%02dV", (int)v_boost,
+  snprintf(buf, sizeof(buf), "Vboost:%02d.%02dV", (int)v_boost,
            (int)((v_boost - (int)v_boost) * 100));
   ssd1306_WriteString(buf, Font_6x8, White);
 
   // --- PWM (DODANE) ---
-  uint32_t pwm = APP_GetPWM() * 100.0f;
+  uint32_t pwm = PID_GetPWM() * 100.0f;
   ssd1306_SetCursor(0, 115);
   snprintf(buf, sizeof(buf), "PWM:%u%%", pwm);
   ssd1306_WriteString(buf, Font_6x8, White);
@@ -182,7 +183,7 @@ void Graph_Draw(void) {
 
 void UpdateGraph() {
   char buf[32];
-  float v_out = APP_GetVOut();
+  float v_out = PID_GetVOut();
   ssd1306_WriteString(buf, Font_6x8, White);
 
   // --- Dodaj próbkę i narysuj wykres ---
