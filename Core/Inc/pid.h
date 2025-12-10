@@ -9,7 +9,7 @@
 #define PWM_MAX 51680 // 95%
 
 // --- NASTAWY ZASILACZA ---
-#define V_TARGET_VOLTAGE 4.0f // [V] Docelowe napięcie wyjściowe
+#define V_TARGET_VOLTAGE 12.0f // [V] Docelowe napięcie wyjściowe
 #define SOFT_START_STEP 0.05f // [V] Krok narastania napięcia na pętlę
 
 // --- ZABEZPIECZENIA ---
