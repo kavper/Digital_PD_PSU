@@ -27,7 +27,7 @@ void APP_Init() {
   // Kalibracja ADC (Dla lepszej precyzji)
   HAL_ADCEx_Calibration_Start(&hadc1, ADC_SINGLE_ENDED);
 
-  // GUI_Init();
+  GUI_Init();
 
   TCPP_SetPDOSelectionMethod(PDO_SEL_METHOD_MAX_PWR);
   TCPP_Init();
@@ -48,5 +48,5 @@ void APP_Run() {
     initialized = true;
   }
 
-  // GUI_Process();
+  GUI_Process();
 }
