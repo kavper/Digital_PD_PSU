@@ -1,6 +1,7 @@
 #include "app.h"
 #include "gui.h"
 #include "main.h"
+#include "stm32g4xx_hal_gpio.h"
 #include "tcpp.h"
 #include "pid.h"
 
@@ -16,6 +17,7 @@
 extern ADC_HandleTypeDef hadc1;
 extern HRTIM_HandleTypeDef hhrtim1;
 extern TIM_HandleTypeDef htim2;
+extern TIM_HandleTypeDef htim1;
 
 bool initialized = false;
 
@@ -39,7 +41,11 @@ void APP_Init() {
 
   // Włączenie drivera
   HAL_GPIO_WritePin(DRV_EN_GPIO_Port, DRV_EN_Pin, 1);
-  
+
+  HAL_TIM_Encoder_Start(&htim1, TIM_CHANNEL_ALL);
+
+  TIM1->CNT = 32768;
+
 }
 
 void APP_Run() {

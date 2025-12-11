@@ -24,20 +24,43 @@ void GUI_Init() {
 }
 
 
+
+void GUI_ShowTIM1CntDiv4() {
+
+    char buf[32];
+    ssd1306_Fill(Black);
+
+    // Nagłówek
+    ssd1306_SetCursor(0, 0);
+    ssd1306_WriteString("TIM1 CNT", Font_11x18, White);
+
+    // Pobranie i przeliczenie wartości
+    uint32_t cnt = TIM1->CNT;
+    uint32_t value = cnt/4;
+
+    // Wyświetlenie wartości
+    ssd1306_SetCursor(0, 30);
+    snprintf(buf, sizeof(buf), "CNT/4: %lu", value);
+    ssd1306_WriteString(buf, Font_11x18, White);
+
+    ssd1306_UpdateScreen();
+}
+
+
 void GUI_Process() {
   static uint32_t last_tick = 0;
   uint32_t now = HAL_GetTick(); // czas w ms od startu MCU
 
   if (now - last_tick >= 100) { // 500ms
     last_tick = now;
-    GUI_Update();
-    // UpdateGraph();
+    HAL_GPIO_ReadPin(ENC_SW_GPIO_Port, ENC_SW_Pin) ? GUI_ShowTIM1CntDiv4() : GUI_Update();
   }
 }
 
 void GUI_Update() {
 
   char buf[32];
+  ssd1306_Fill(Black);
 
   // Nagłówek
   ssd1306_SetCursor(0, 0);
@@ -112,6 +135,7 @@ void GUI_Update() {
 
   ssd1306_UpdateScreen();
 }
+
 
 #define GRAPH_WIDTH 128
 #define GRAPH_HEIGHT 128

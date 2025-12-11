@@ -87,6 +87,13 @@ void Error_Handler(void);
 #define DRV_LI_GPIO_Port GPIOB
 #define DRV_HI_Pin GPIO_PIN_15
 #define DRV_HI_GPIO_Port GPIOB
+#define ENC_B_Pin GPIO_PIN_8
+#define ENC_B_GPIO_Port GPIOA
+#define ENC_A_Pin GPIO_PIN_9
+#define ENC_A_GPIO_Port GPIOA
+#define ENC_SW_Pin GPIO_PIN_10
+#define ENC_SW_GPIO_Port GPIOA
+#define ENC_SW_EXTI_IRQn EXTI15_10_IRQn
 #define DB_Pin GPIO_PIN_3
 #define DB_GPIO_Port GPIOB
 #define DRV_EN_Pin GPIO_PIN_9
