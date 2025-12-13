@@ -79,6 +79,8 @@ void Error_Handler(void);
 #define V_OUT_ADC_GPIO_Port GPIOA
 #define I_OUT_ADC_Pin GPIO_PIN_2
 #define I_OUT_ADC_GPIO_Port GPIOA
+#define BTN_AUX1_Pin GPIO_PIN_1
+#define BTN_AUX1_GPIO_Port GPIOB
 #define I_IN_ADC_Pin GPIO_PIN_11
 #define I_IN_ADC_GPIO_Port GPIOB
 #define V_BOOST_ADC_Pin GPIO_PIN_12
