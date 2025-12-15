@@ -1,9 +1,7 @@
 #ifndef __GUI_H
 #define __GUI_H
 
-void GUI_Init();
-void GUI_Update(); // natychmiastowa aktualizacja ekranu
-void UpdateGraph(); // aktualizacja wykresu
-void GUI_Process(); // aktualizacja ekranu w petli glownej co 500ms
+void GUI_Init(void);
+void GUI_Process(void);
 
 #endif /* __GUI_H */

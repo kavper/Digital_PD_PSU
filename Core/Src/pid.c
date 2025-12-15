@@ -8,11 +8,11 @@
 // ==========================================
 
 // Parametry PID (Dobierz pod swoje cewki, te są bezpieczne na start)
-#define CV_KP  1000.0f
-#define CV_KI  80.0f
+#define CV_KP  100.0f
+#define CV_KI  10.0f
 
-#define CC_KP  200.0f
-#define CC_KI  80.0f
+#define CC_KP  100.0f
+#define CC_KI  10.0f
 
 // Limit całki (zabezpieczenie przed nasyceniem)
 #define PID_INTEGRAL_MAX  ((float)HRTIM_PERIOD * 0.9f)
@@ -127,11 +127,7 @@ void PID_HandleInterrupt() {
     v_boost = (float)adc_raw[3] * COEFF_VOLTAGE;
     i_in    = (float)adc_raw[4] * COEFF_CURRENT;
 
-    // 2. Soft-Start
-    if (current_setpoint_v < target_voltage) {
-        current_setpoint_v += SOFT_START_STEP;
-        if (current_setpoint_v > target_voltage) current_setpoint_v = target_voltage;
-    }
+    current_setpoint_v = target_voltage;
 
     // 3. Feed Forward (Szacowanie wypełnienia)
     float pwm_ff = 0.0f;
@@ -207,4 +203,24 @@ void PID_HandleInterrupt() {
     uint32_t cmp3 = u32_pwm / 2;
     if (cmp3 < 200) cmp3 = 200; // Minimalny czas dla ADC
     hrtim_ptr->Instance->sTimerxRegs[HRTIM_TIMERINDEX_TIMER_D].CMP3xR = cmp3;
+}
+
+
+
+void PID_SetTargetVoltage(float val) {
+    target_voltage = val;
+}
+
+void PID_SetTargetCurrent(float val) {
+    target_current_lim = val;
+}
+
+float PID_GetTargetVoltage(void)
+{
+    return target_voltage;
+}
+
+float PID_GetTargetCurrent(void)
+{
+    return target_current_lim;
 }
