@@ -5,7 +5,7 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Debuguj płytkę",
+            "name": "Debug",
             "type": "stlinkgdbtarget",
             "request": "launch",
             "origin": "snippet",
@@ -19,7 +19,7 @@
             ]
         },
         {
-            "name": "Programuj płytkę",
+            "name": "Flash",
             "type": "cppdbg",
             "request": "launch",
             "program": "${command:st-stm32-ide-debug-launch.get-projects-binary-from-context1}",

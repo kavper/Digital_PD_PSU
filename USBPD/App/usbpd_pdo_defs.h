@@ -108,7 +108,7 @@ uint32_t PORT0_PDO_ListSNK[USBPD_MAX_NB_PDO] =
   (
     USBPD_PDO_TYPE_FIXED                 | /* Fixed supply PDO            */
 
-    USBPD_PDO_SNK_FIXED_SET_VOLTAGE(20000U)         | /* Voltage in mV               */
+    USBPD_PDO_SNK_FIXED_SET_VOLTAGE(5000U)         | /* Voltage in mV               */
     USBPD_PDO_SNK_FIXED_SET_OP_CURRENT(3000U)     | /* Operating current in  mA            */
 
     /* Common definitions applicable to all PDOs, defined only in PDO 1 */
@@ -124,24 +124,24 @@ uint32_t PORT0_PDO_ListSNK[USBPD_MAX_NB_PDO] =
   (
     USBPD_PDO_TYPE_FIXED                        | /* Fixed supply                */
 
-    USBPD_PDO_SNK_FIXED_SET_VOLTAGE(15000U)         | /* Voltage in mV               */
-    USBPD_PDO_SNK_FIXED_SET_OP_CURRENT(3000U)       /* Operating current in  mA            */
+    USBPD_PDO_SNK_FIXED_SET_VOLTAGE(9000U)         | /* Voltage in mV               */
+    USBPD_PDO_SNK_FIXED_SET_OP_CURRENT(0U)       /* Operating current in  mA            */
   ),
 
   /* PDO 3 */
   (
     USBPD_PDO_TYPE_FIXED                        | /* Fixed supply                */
 
-    USBPD_PDO_SNK_FIXED_SET_VOLTAGE(9000U)         | /* Voltage in mV               */
-    USBPD_PDO_SNK_FIXED_SET_OP_CURRENT(3000U)       /* Operating current in  mA            */
+    USBPD_PDO_SNK_FIXED_SET_VOLTAGE(15000U)         | /* Voltage in mV               */
+    USBPD_PDO_SNK_FIXED_SET_OP_CURRENT(0U)       /* Operating current in  mA            */
   ),
 
   /* PDO 4 */
   (
     USBPD_PDO_TYPE_FIXED                        | /* Fixed supply                */
 
-    USBPD_PDO_SNK_FIXED_SET_VOLTAGE(5000U)         | /* Voltage in mV               */
-    USBPD_PDO_SNK_FIXED_SET_OP_CURRENT(3000U)       /* Operating current in  mA            */
+    USBPD_PDO_SNK_FIXED_SET_VOLTAGE(20000U)         | /* Voltage in mV               */
+    USBPD_PDO_SNK_FIXED_SET_OP_CURRENT(1000U)       /* Operating current in  mA            */
   ),
 
   /* PDO 5 */ (0x00000000U),

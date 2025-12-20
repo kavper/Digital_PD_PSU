@@ -54,7 +54,7 @@ static inline float clamp(float v, float mn, float mx) {
     return v;
 }
 
-// Funkcja restartująca ADC "na chama" (Gwarancja ciągłości działania)
+// Funkcja restartująca ADC 
 void PID_AdcRestartDMA() {
     HAL_ADC_Start_DMA(adc_ptr, (uint32_t *)adc_raw, 5);
 }
@@ -68,12 +68,10 @@ float PID_GetIOut()   { return i_out; }
 float PID_GetVBoost() { return v_boost; }
 float PID_GetIIn()    { return i_in; }
 
-// Zwraca aktualny setpoint napięcia
 float PID_GetCurrentSetpoint() { 
     return current_setpoint_v; 
 }
 
-// Zwraca % wypełnienia PWM (0.0 - 1.0)
 float PID_GetPWM() {
     if (!hrtim_ptr) return 0.0f;
     uint32_t cmp1 = hrtim_ptr->Instance->sTimerxRegs[HRTIM_TIMERINDEX_TIMER_D].CMP1xR;
@@ -88,7 +86,7 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc) {
         // 1. Oblicz PID
         PID_HandleInterrupt();
         
-        // 2. Kopnij ADC żeby mierzyło dalej (Metoda brute-force)
+        // 2. Restart ADC
         PID_AdcRestartDMA();
     }
 }

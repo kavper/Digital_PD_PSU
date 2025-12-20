@@ -124,7 +124,7 @@ typedef struct
 /* Method used to find the "best" PDO */
 
 // ISTOTNA ISTOTNE METODA WYBORU PDO!!!!
-USBPD_DPM_PDO_SelectionMethodTypeDef USBPD_DPM_PDO_Sel_Method = PDO_SEL_METHOD_MIN_VOLT;
+USBPD_DPM_PDO_SelectionMethodTypeDef USBPD_DPM_PDO_Sel_Method = PDO_SEL_METHOD_MAX_PWR;
 // to dziala, ale wymaga ustawienia liczyb PDO dla sinka na 4 dla general PDO oraz
 // ustawienia w 2 miejscu liczyb pdo na 4 i kazde pdo skonfigurowane w cube!
 
