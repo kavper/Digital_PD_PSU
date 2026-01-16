@@ -101,8 +101,9 @@ void PID_Init(ADC_HandleTypeDef *hadc, HRTIM_HandleTypeDef *hhrtim) {
     // Reset zmiennych
     v_in = v_out = i_out = v_boost = i_in = 0.0f;
     cv_integral = cc_integral = 0.0f;
-    current_setpoint_v = 0.0f;
-    target_current_lim = I_TARGET_CURRENT;
+
+    target_voltage = 0.0f;
+    target_current_lim = 1.0f;
 
     // Ustaw PWM na minimum
     hrtim_ptr->Instance->sTimerxRegs[HRTIM_TIMERINDEX_TIMER_D].CMP1xR = PWM_MIN;
@@ -152,18 +153,18 @@ void PID_HandleInterrupt() {
     // to mamy twarde zwarcie. Natychmiast zerujemy całki i tniemy PWM.
     // To ratuje zasilacz PD przed odcięciem.
     
-    if (v_out < 1.0f && i_out > (target_current_lim * 0.8f)) {
-        // Wykryto twarde zwarcie!
+    // if (v_out < 1.0f && i_out > (target_current_lim * 0.8f)) {
+    //     // Wykryto twarde zwarcie!
         
-        // 1. Resetujemy całkę napięciową (żeby nie pompowała w górę)
-        cv_integral = 0.0f; 
+    //     // 1. Resetujemy całkę napięciową (żeby nie pompowała w górę)
+    //     cv_integral = 0.0f; 
         
-        // 2. Ustawiamy całkę prądową nisko, żeby startowała od zera
-        cc_integral = 0.0f;
+    //     // 2. Ustawiamy całkę prądową nisko, żeby startowała od zera
+    //     cc_integral = 0.0f;
         
-        // 3. Wymuszamy minimalny PWM w tym cyklu
-        out_cc = (float)PWM_MIN; 
-    }
+    //     // 3. Wymuszamy minimalny PWM w tym cyklu
+    //     out_cc = (float)PWM_MIN; 
+    // }
 
     if (out_cc < out_cv) {
         // -> Tryb CC (Ograniczenie prądu)
@@ -221,4 +222,10 @@ float PID_GetTargetVoltage(void)
 float PID_GetTargetCurrent(void)
 {
     return target_current_lim;
+}
+
+void PID_Reset(void)
+{
+    cv_integral = 0.0f;
+    cc_integral = 0.0f;
 }

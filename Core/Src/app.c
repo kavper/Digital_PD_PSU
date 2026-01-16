@@ -35,7 +35,7 @@ void APP_Init() {
   PID_Init(&hadc1, &hhrtim1);
 
   // Włączenie drivera
-  HAL_GPIO_WritePin(DRV_EN_GPIO_Port, DRV_EN_Pin, 1);
+  // HAL_GPIO_WritePin(DRV_EN_GPIO_Port, DRV_EN_Pin, 1);
 
   HAL_TIM_Encoder_Start(&htim1, TIM_CHANNEL_ALL);
 
