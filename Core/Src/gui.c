@@ -5,28 +5,30 @@
 #include "pid.h"
 #include "ssd1306.h"
 #include "ssd1306_fonts.h"
-#include <stdio.h>
 #include <stdbool.h>
+#include <stdio.h>
 
 #define GUI_FILTER_ALPHA 0.8f
 
 static float v_out = 0.0f;
 static float i_out = 0.0f;
 static float p_out = 0.0f;
-static float v_in  = 0.0f;
+static float v_in = 0.0f;
 
 static inline float GUI_Filter(float prev, float in) {
   return prev + GUI_FILTER_ALPHA * (in - prev);
 }
 
-/* ================== KONFIGURACJA ================== */
-#define BTN_DEBOUNCE_MS      50u
+static uint8_t enc_synced = 0;
 
-static const float EDIT_STEPS[] = { 10.0f, 1.0f, 0.1f, 0.01f };
-#define EDIT_STEP_COUNT (sizeof(EDIT_STEPS)/sizeof(EDIT_STEPS[0]))
+/* ================== KONFIGURACJA ================== */
+#define BTN_DEBOUNCE_MS 50u
+
+static const float EDIT_STEPS[] = {10.0f, 1.0f, 0.1f, 0.01f};
+#define EDIT_STEP_COUNT (sizeof(EDIT_STEPS) / sizeof(EDIT_STEPS[0]))
 
 /* ================== MAKRA POMOCNICZE ================== */
-#define INT_P(x)  ((int)(x))
+#define INT_P(x) ((int)(x))
 #define FRAC_P(x) ((int)(((x) - (int)(x)) * 100))
 
 /* ================== ZMIENNE STANU ================== */
@@ -45,8 +47,8 @@ static uint8_t edit_pos = 0;
 
 /* ================== PROSTE BUTTON HANDLING ================== */
 typedef struct {
-  uint8_t  stable;        /* 1=puszczony, 0=wciśnięty */
-  uint8_t  last_raw;
+  uint8_t stable; /* 1=puszczony, 0=wciśnięty */
+  uint8_t last_raw;
   uint32_t last_change_ms;
 } btn_t;
 
@@ -86,8 +88,10 @@ void GUI_FillRect(int x, int y, int w, int h, SSD1306_COLOR color) {
 }
 
 void GUI_DrawProgressBar(int x, int y, int w, int h, int percent) {
-  if (percent > 100) percent = 100;
-  if (percent < 0)   percent = 0;
+  if (percent > 100)
+    percent = 100;
+  if (percent < 0)
+    percent = 0;
 
   ssd1306_DrawRectangle(x, y, x + w, y + h, White);
 
@@ -97,18 +101,13 @@ void GUI_DrawProgressBar(int x, int y, int w, int h, int percent) {
   }
 }
 
-static void GUI_DrawDigitUnderline(int base_x, int y_line,
-                                   uint8_t step_idx,
-                                   SSD1306_COLOR color)
-{
-  if (step_idx > 3) step_idx = 3;
+static void GUI_DrawDigitUnderline(int base_x, int y_line, uint8_t step_idx,
+                                   SSD1306_COLOR color) {
+  if (step_idx > 3)
+    step_idx = 3;
 
-  static const uint8_t digit_x_offset[4] = {
-    0,
-    10,
-    10 + 10 + 5,
-    10 + 10 + 5 + 10
-  };
+  static const uint8_t digit_x_offset[4] = {0, 10, 10 + 10 + 5,
+                                            10 + 10 + 5 + 10};
 
   int x0 = base_x + digit_x_offset[step_idx];
   int x1 = x0 + 7;
@@ -117,10 +116,9 @@ static void GUI_DrawDigitUnderline(int base_x, int y_line,
 }
 
 /* ================== OUTPUT ENABLE (HW) ================== */
-static void GUI_SetOutputEnabled(bool en)
-{
+static void GUI_SetOutputEnabled(bool en) {
   if (!en) {
-    /* OFF: najpierw uspokój PID i napięcie */
+    /* OFF: najpierw zjedź napięciem (lub reset) */
     PID_SetTargetVoltage(0.0f);
     PID_SetTargetCurrent(i_target_local); /* limit prądu zostaje */
     PID_Reset();
@@ -132,7 +130,7 @@ static void GUI_SetOutputEnabled(bool en)
     return;
   }
 
-  /* ON: najpierw reset PID i nastawy, potem enable driver */
+  /* ON: najpierw PID_Reset(), potem targety, na końcu enable pin */
   PID_Reset();
   PID_SetTargetVoltage(v_target_local);
   PID_SetTargetCurrent(i_target_local);
@@ -147,25 +145,29 @@ void GUI_HandleEncoder(void) {
   int32_t cnt = TIM1->CNT / 4;
   int32_t delta = cnt - enc_last;
 
-  if (delta == 0) return;
+  if (delta == 0)
+    return;
   enc_last = cnt;
 
   if (edit_pos < 4) {
     float step = EDIT_STEPS[edit_pos];
     v_target_local += (float)delta * step;
-    if (v_target_local < 0.0f)  v_target_local = 0.0f;
-    if (v_target_local > 30.0f) v_target_local = 30.0f;
+    if (v_target_local < 0.0f)
+      v_target_local = 0.0f;
+    if (v_target_local > 30.0f)
+      v_target_local = 30.0f;
 
-    /* zawsze aktualizuj PID setpoint, ale HW driver i tak jest OFF gdy trzeba */
+    /* zawsze aktualizuj PID target */
     PID_SetTargetVoltage(v_target_local);
 
   } else if (edit_pos < 8) {
     float step = EDIT_STEPS[edit_pos - 4];
     i_target_local += (float)delta * step;
 
-    /* bez “debilnego” 100mA minimum */
-    if (i_target_local < 0.0f)  i_target_local = 0.0f;
-    if (i_target_local > 20.0f) i_target_local = 20.0f;
+    if (i_target_local < 0.0f)
+      i_target_local = 0.0f;
+    if (i_target_local > 10.0f)
+      i_target_local = 10.0f;
 
     PID_SetTargetCurrent(i_target_local);
   }
@@ -179,11 +181,11 @@ static void GUI_DrawMain(void) {
 
   float v_out_raw = PID_GetVOut();
   float i_out_raw = PID_GetIOut();
-  float v_in_raw  = PID_GetVIn();
+  float v_in_raw = PID_GetVIn();
 
   v_out = GUI_Filter(v_out, v_out_raw);
   i_out = GUI_Filter(i_out, i_out_raw);
-  v_in  = GUI_Filter(v_in,  v_in_raw);
+  v_in = GUI_Filter(v_in, v_in_raw);
   p_out = GUI_Filter(p_out, v_out * i_out);
 
   float v_display = v_target_local;
@@ -233,17 +235,21 @@ static void GUI_DrawMain(void) {
   SSD1306_COLOR bg_i, txt_i;
 
   if (gui_mode == GUI_EDIT_V) {
-    bg_v = White; txt_v = Black;
+    bg_v = White;
+    txt_v = Black;
     GUI_FillRect(0, 86, 63, 42, White);
   } else {
-    bg_v = Black; txt_v = White;
+    bg_v = Black;
+    txt_v = White;
   }
 
   if (gui_mode == GUI_EDIT_I) {
-    bg_i = White; txt_i = Black;
+    bg_i = White;
+    txt_i = Black;
     GUI_FillRect(65, 86, 63, 42, White);
   } else {
-    bg_i = Black; txt_i = White;
+    bg_i = Black;
+    txt_i = White;
   }
 
   ssd1306_SetCursor(8, 91);
@@ -273,6 +279,9 @@ static void GUI_DrawMain(void) {
 
 /* ================== API GLOWNE ================== */
 void GUI_Init(void) {
+  enc_synced = 0;
+  enc_last = TIM1->CNT / 4;
+
   ssd1306_Init();
   ssd1306_Fill(Black);
 
@@ -281,6 +290,9 @@ void GUI_Init(void) {
 
   enc_last = TIM1->CNT / 4;
   HAL_Delay(100);
+
+  /* PIN ENABLE: twardo OFF na starcie */
+  HAL_GPIO_WritePin(DRV_EN_GPIO_Port, DRV_EN_Pin, GPIO_PIN_RESET);
 
   /* startowe nastawy */
   v_target_local = 0.0f;
@@ -305,19 +317,38 @@ void GUI_Process(void) {
   static uint8_t inited = 0;
 
   if (!inited) {
-    BTN_Init(&btn_enc,  HAL_GPIO_ReadPin(ENC_SW_GPIO_Port, ENC_SW_Pin));
+    BTN_Init(&btn_enc, HAL_GPIO_ReadPin(ENC_SW_GPIO_Port, ENC_SW_Pin));
     BTN_Init(&btn_aux1, HAL_GPIO_ReadPin(BTN_AUX1_GPIO_Port, BTN_AUX1_Pin));
     BTN_Init(&btn_aux2, HAL_GPIO_ReadPin(BTN_AUX2_GPIO_Port, BTN_AUX2_Pin));
     inited = 1;
   }
 
+    /* Pierwszy cykl: zsynchronizuj enkoder i nie licz delty, bo potrafi strzelić */
+  if (!enc_synced) {
+    enc_last = TIM1->CNT / 4;
+    enc_synced = 1;
+
+    /* Dla pewności: startowe nastawy, żeby GUI nie pokazało śmieci */
+    v_target_local = 0.0f;
+    i_target_local = 1.0f;
+    PID_SetTargetVoltage(v_target_local);
+    PID_SetTargetCurrent(i_target_local);
+
+    /* Twardo OFF */
+    HAL_GPIO_WritePin(DRV_EN_GPIO_Port, DRV_EN_Pin, GPIO_PIN_RESET);
+    output_enabled = false;
+
+    /* I tyle. Wracamy, żeby nic nie ruszyć w tym cyklu. */
+    return;
+  }
+
   GUI_HandleEncoder();
 
-  uint8_t enc_raw  = HAL_GPIO_ReadPin(ENC_SW_GPIO_Port,  ENC_SW_Pin);
+  uint8_t enc_raw = HAL_GPIO_ReadPin(ENC_SW_GPIO_Port, ENC_SW_Pin);
   uint8_t aux1_raw = HAL_GPIO_ReadPin(BTN_AUX1_GPIO_Port, BTN_AUX1_Pin);
   uint8_t aux2_raw = HAL_GPIO_ReadPin(BTN_AUX2_GPIO_Port, BTN_AUX2_Pin);
 
-  uint8_t enc_click  = BTN_Click(&btn_enc,  enc_raw);
+  uint8_t enc_click = BTN_Click(&btn_enc, enc_raw);
   uint8_t aux1_click = BTN_Click(&btn_aux1, aux1_raw);
   uint8_t aux2_click = BTN_Click(&btn_aux2, aux2_raw);
 
