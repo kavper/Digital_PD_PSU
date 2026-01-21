@@ -79,12 +79,15 @@ void Error_Handler(void);
 #define V_OUT_ADC_GPIO_Port GPIOA
 #define I_OUT_ADC_Pin GPIO_PIN_2
 #define I_OUT_ADC_GPIO_Port GPIOA
-#define BTN_ON_OFF_Pin GPIO_PIN_0
-#define BTN_ON_OFF_GPIO_Port GPIOB
+#define BTN_ONOFF_Pin GPIO_PIN_0
+#define BTN_ONOFF_GPIO_Port GPIOB
+#define BTN_ONOFF_EXTI_IRQn EXTI0_IRQn
 #define BTN_AUX1_Pin GPIO_PIN_1
 #define BTN_AUX1_GPIO_Port GPIOB
+#define BTN_AUX1_EXTI_IRQn EXTI1_IRQn
 #define BTN_AUX2_Pin GPIO_PIN_2
 #define BTN_AUX2_GPIO_Port GPIOB
+#define BTN_AUX2_EXTI_IRQn EXTI2_IRQn
 #define BTN_CC_CV_Pin GPIO_PIN_10
 #define BTN_CC_CV_GPIO_Port GPIOB
 #define I_IN_ADC_Pin GPIO_PIN_11

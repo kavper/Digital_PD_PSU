@@ -728,11 +728,17 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(LED_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : BTN_ON_OFF_Pin BTN_AUX1_Pin BTN_AUX2_Pin BTN_CC_CV_Pin */
-  GPIO_InitStruct.Pin = BTN_ON_OFF_Pin|BTN_AUX1_Pin|BTN_AUX2_Pin|BTN_CC_CV_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  /*Configure GPIO pins : BTN_ONOFF_Pin BTN_AUX1_Pin BTN_AUX2_Pin */
+  GPIO_InitStruct.Pin = BTN_ONOFF_Pin|BTN_AUX1_Pin|BTN_AUX2_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
   GPIO_InitStruct.Pull = GPIO_PULLUP;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : BTN_CC_CV_Pin */
+  GPIO_InitStruct.Pin = BTN_CC_CV_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(BTN_CC_CV_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pin : ENC_SW_Pin */
   GPIO_InitStruct.Pin = ENC_SW_Pin;
@@ -748,6 +754,15 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
   /* EXTI interrupt init*/
+  HAL_NVIC_SetPriority(EXTI0_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(EXTI0_IRQn);
+
+  HAL_NVIC_SetPriority(EXTI1_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(EXTI1_IRQn);
+
+  HAL_NVIC_SetPriority(EXTI2_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(EXTI2_IRQn);
+
   HAL_NVIC_SetPriority(EXTI15_10_IRQn, 0, 0);
   HAL_NVIC_EnableIRQ(EXTI15_10_IRQn);
 

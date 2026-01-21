@@ -2,6 +2,7 @@
 #include "main.h"
 #include "stm32g4xx_hal_adc.h"
 #include "stm32g4xx_hal_hrtim.h"
+#include <stdbool.h>
 
 // ==========================================
 // NASTAWY REGULATORA
@@ -18,11 +19,6 @@
 #define PID_INTEGRAL_MAX  ((float)HRTIM_PERIOD * 0.9f)
 
 // ==========================================
-// SOFT-START / RAMP
-// ==========================================
-#define RAMP_STEP 0.005f
-
-// ==========================================
 // ZMIENNE
 // ==========================================
 
@@ -37,8 +33,8 @@ static float v_boost = 0.0f;
 static float i_in = 0.0f;
 
 // Zadane wartości
-float current_setpoint_v = 0.0f;   // Aktualne napięcie (narasta przy starcie)
-float target_voltage     = 0.0f;   // Start bezpieczny (GUI i tak ustawia)
+float current_setpoint_v = 0.0f;   // teraz to tylko "mirror" target_voltage
+float target_voltage     = 0.0f;   // GUI ustawia
 float target_current_lim = I_TARGET_CURRENT;
 
 // Integratory
@@ -59,18 +55,12 @@ static inline float clamp(float v, float mn, float mx) {
     return v;
 }
 
-static inline float ramp_towards(float cur, float tgt, float step) {
-    if (cur < (tgt - step)) return cur + step;
-    if (cur > (tgt + step)) return cur - step;
-    return tgt;
-}
-
 static inline bool hw_output_enabled(void) {
     return (HAL_GPIO_ReadPin(DRV_EN_GPIO_Port, DRV_EN_Pin) == GPIO_PIN_SET);
 }
 
 // Funkcja restartująca ADC
-void PID_AdcRestartDMA() {
+void PID_AdcRestartDMA(void) {
     if (!adc_ptr) return;
     (void)HAL_ADC_Start_DMA(adc_ptr, (uint32_t *)adc_raw, 5);
 }
@@ -78,17 +68,17 @@ void PID_AdcRestartDMA() {
 // ==========================================
 // GETTERY (Dla GUI)
 // ==========================================
-float PID_GetVIn()    { return v_in; }
-float PID_GetVOut()   { return v_out; }
-float PID_GetIOut()   { return i_out; }
-float PID_GetVBoost() { return v_boost; }
-float PID_GetIIn()    { return i_in; }
+float PID_GetVIn(void)    { return v_in; }
+float PID_GetVOut(void)   { return v_out; }
+float PID_GetIOut(void)   { return i_out; }
+float PID_GetVBoost(void) { return v_boost; }
+float PID_GetIIn(void)    { return i_in; }
 
-float PID_GetCurrentSetpoint() {
+float PID_GetCurrentSetpoint(void) {
     return current_setpoint_v;
 }
 
-float PID_GetPWM() {
+float PID_GetPWM(void) {
     if (!hrtim_ptr) return 0.0f;
     uint32_t cmp1 = hrtim_ptr->Instance->sTimerxRegs[HRTIM_TIMERINDEX_TIMER_D].CMP1xR;
     return (float)cmp1 / (float)HRTIM_PERIOD;
@@ -161,7 +151,7 @@ void PID_Init(ADC_HandleTypeDef *hadc, HRTIM_HandleTypeDef *hhrtim) {
 // ==========================================
 // GŁÓWNA PĘTLA REGULACJI
 // ==========================================
-void PID_HandleInterrupt() {
+void PID_HandleInterrupt(void) {
     // 1. Konwersja pomiarów
     v_in    = (float)adc_raw[0] * COEFF_VOLTAGE;
     v_out   = (float)adc_raw[1] * COEFF_VOLTAGE;
@@ -170,7 +160,6 @@ void PID_HandleInterrupt() {
     i_in    = (float)adc_raw[4] * COEFF_CURRENT;
 
     // 2. Bezpieczeństwo: gdy wyjście wyłączone lub target=0, nie całkuj i trzymaj PWM na minimum
-    //    (fix "30V startup bug" + brak integracji bez aktywacji wyjścia)
     if (!hw_output_enabled() || (target_voltage <= 0.0f)) {
         cv_integral = 0.0f;
         cc_integral = 0.0f;
@@ -187,8 +176,8 @@ void PID_HandleInterrupt() {
         return;
     }
 
-    // 3. Soft-start / rampa setpointu napięcia
-    current_setpoint_v = ramp_towards(current_setpoint_v, target_voltage, RAMP_STEP);
+    // 3. BRAK SOFT-STARTU: od razu bierzemy target jako setpoint
+    current_setpoint_v = target_voltage;
 
     // 4. Feed Forward (Szacowanie wypełnienia)
     float pwm_ff = 0.0f;

@@ -8,12 +8,33 @@
 #include <stdbool.h>
 #include <stdio.h>
 
-#define GUI_FILTER_ALPHA 0.8f
+#define GUI_FILTER_ALPHA 0.5f
+#define BTN_DEBOUNCE_MS 50u
 
 static float v_out = 0.0f;
 static float i_out = 0.0f;
 static float p_out = 0.0f;
 static float v_in = 0.0f;
+
+volatile uint8_t enc_click  = 0;
+volatile uint8_t aux1_click = 0;
+volatile uint8_t aux2_click = 0;
+
+static volatile uint32_t enc_last_ms  = 0;
+static volatile uint32_t aux1_last_ms = 0;
+static volatile uint32_t aux2_last_ms = 0;
+
+static inline void debounce_set_flag(volatile uint8_t *flag,
+                                     volatile uint32_t *last_ms)
+{
+  uint32_t now = HAL_GetTick();
+
+  // HAL_GetTick() działa w SysTick (ms). W ISR ok, byle bez długich akcji.
+  if ((uint32_t)(now - *last_ms) >= BTN_DEBOUNCE_MS) {
+    *last_ms = now;
+    *flag = 1;
+  }
+}
 
 static inline float GUI_Filter(float prev, float in) {
   return prev + GUI_FILTER_ALPHA * (in - prev);
@@ -58,7 +79,25 @@ static void BTN_Init(btn_t *b, uint8_t initial_raw) {
   b->last_change_ms = HAL_GetTick();
 }
 
-static uint8_t BTN_Click(btn_t *b, uint8_t raw) {
+void BTN_enc_handle() {
+  debounce_set_flag(&enc_click, &enc_last_ms);
+}
+
+void BTN_aux1_handle() {
+  debounce_set_flag(&aux1_click, &aux1_last_ms);
+}
+
+void BTN_aux2_handle() {
+  debounce_set_flag(&aux2_click, &aux2_last_ms);
+}
+
+void BTN_reset() {
+  enc_click = 0;
+  aux1_click = 0;
+  aux2_click = 0;
+}
+
+__unused static uint8_t __BTN_CLICK(btn_t *b, uint8_t raw) {
   uint32_t now = HAL_GetTick();
 
   if (raw != b->last_raw) {
@@ -231,24 +270,21 @@ static void GUI_DrawMain(void) {
   ssd1306_Line(0, 85, 127, 85, White);
   ssd1306_Line(64, 85, 64, 128, White);
 
-  SSD1306_COLOR bg_v, txt_v;
-  SSD1306_COLOR bg_i, txt_i;
+  SSD1306_COLOR  txt_v;
+  SSD1306_COLOR  txt_i;
 
   if (gui_mode == GUI_EDIT_V) {
-    bg_v = White;
     txt_v = Black;
     GUI_FillRect(0, 86, 63, 42, White);
   } else {
-    bg_v = Black;
+    
     txt_v = White;
   }
 
   if (gui_mode == GUI_EDIT_I) {
-    bg_i = White;
     txt_i = Black;
     GUI_FillRect(65, 86, 63, 42, White);
   } else {
-    bg_i = Black;
     txt_i = White;
   }
 
@@ -344,17 +380,10 @@ void GUI_Process(void) {
 
   GUI_HandleEncoder();
 
-  uint8_t enc_raw = HAL_GPIO_ReadPin(ENC_SW_GPIO_Port, ENC_SW_Pin);
-  uint8_t aux1_raw = HAL_GPIO_ReadPin(BTN_AUX1_GPIO_Port, BTN_AUX1_Pin);
-  uint8_t aux2_raw = HAL_GPIO_ReadPin(BTN_AUX2_GPIO_Port, BTN_AUX2_Pin);
-
-  uint8_t enc_click = BTN_Click(&btn_enc, enc_raw);
-  uint8_t aux1_click = BTN_Click(&btn_aux1, aux1_raw);
-  uint8_t aux2_click = BTN_Click(&btn_aux2, aux2_raw);
-
   /* ENC: toggle output + hardware pin */
   if (enc_click) {
     GUI_SetOutputEnabled(!output_enabled);
+    enc_click = 0;
   }
 
   /* Edycja pozycji cyfry */
@@ -372,9 +401,11 @@ void GUI_Process(void) {
   } else {
     if (aux1_click) {
       edit_pos = (edit_pos + 1) % 8;
+      aux1_click = 0;
     }
     if (aux2_click) {
       edit_pos = (edit_pos + 7) % 8;
+      aux2_click = 0;
     }
 
     gui_mode = (edit_pos < 4) ? GUI_EDIT_V : GUI_EDIT_I;
