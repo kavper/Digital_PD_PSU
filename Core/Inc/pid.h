@@ -4,12 +4,11 @@
 #include "main.h"
 
 // --- KONFIGURACJA HRTIM ---
-#define HRTIM_PERIOD 10880
+#define HRTIM_PERIOD 34000
 
-// !!! NAPRAWA 1: Zmień 100 na 0. 
-// Inaczej zasilacz zawsze będzie pompował trochę napięcia!
-#define PWM_MIN 0         
-#define PWM_MAX 10880
+// 0 PWM przy wyjściu OFF / 0V.
+#define PWM_MIN 0
+#define PWM_MAX 34000
 
 // --- NASTAWY ZASILACZA ---
 #define V_TARGET_VOLTAGE 0.0f     // Bezpieczniejszy start
@@ -19,6 +18,17 @@
 // --- KALIBRACJA ADC ---
 #define COEFF_VOLTAGE 0.008682f
 #define COEFF_CURRENT 0.002442f
+
+// --- KOREKCJA KALIBRACJI POMIARU ---
+// Offset napięcia wyłączony zgodnie z życzeniem.
+#define VOUT_CAL_OFFSET_V  (0.0f)
+// Iout: błąd liniowy (1.00A -> 0.95A, 4.00A -> 3.80A) => gain 0.95.
+#define IOUT_CAL_GAIN      (0.95f)
+#define IOUT_CAL_OFFSET_A  (0.0f)
+
+// --- CZĘSTOTLIWOŚĆ PĘTLI REGULACJI ---
+// Dla f_sw=20kHz i ADC postscaler=4 => ~4kHz.
+#define CTRL_LOOP_HZ       (4000.0f)
 
 
 /* Bufor DMA ADC (5 kanałów) */

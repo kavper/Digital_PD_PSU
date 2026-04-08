@@ -8,13 +8,20 @@
 #include <stdbool.h>
 #include <stdio.h>
 
+#include <math.h>
+
 #define GUI_FILTER_ALPHA 0.5f
 #define BTN_DEBOUNCE_MS 50u
+
+#define GUI_V_SNAP_TO_SET   0.01f   // 10 mV
+#define GUI_V_DEADBAND      0.02f   // 20 mV (trzymanie wskazania)
 
 static float v_out = 0.0f;
 static float i_out = 0.0f;
 static float p_out = 0.0f;
 static float v_in = 0.0f;
+
+static float v_target_local = 0.0f;
 
 volatile uint8_t enc_click  = 0;
 volatile uint8_t aux1_click = 0;
@@ -36,9 +43,29 @@ static inline void debounce_set_flag(volatile uint8_t *flag,
   }
 }
 
-static inline float GUI_Filter(float prev, float in) {
+static inline float GUI_FilterEMA(float prev, float in) {
   return prev + GUI_FILTER_ALPHA * (in - prev);
 }
+
+static inline float GUI_FilterVout(float prev, float in)
+{
+  float cand = in;
+
+  // 1) Snap do wartości ustawionej (SET) z dokładnością 10 mV
+  //    Natychmiast, bez EMA, żeby nie było "działa po czasie".
+  if (fabsf(cand - v_target_local) <= GUI_V_SNAP_TO_SET) {
+    return v_target_local;
+  }
+
+  // 2) Deadband tylko dla napięcia: jeśli zmiana mała, nie ruszaj wyświetlanej wartości
+  if (fabsf(cand - prev) < GUI_V_DEADBAND) {
+    return prev;
+  }
+
+  // 3) EMA
+  return prev + GUI_FILTER_ALPHA * (cand - prev);
+}
+
 
 static uint8_t enc_synced = 0;
 
@@ -60,7 +87,6 @@ static int32_t enc_last = 0;
 
 static bool output_enabled = false;
 
-static float v_target_local = 0.0f;
 static float i_target_local = 1.0f;
 
 /* 0–3: V (10,1,0.1,0.01), 4–7: I (10,1,0.1,0.01) */
@@ -222,10 +248,10 @@ static void GUI_DrawMain(void) {
   float i_out_raw = PID_GetIOut();
   float v_in_raw = PID_GetVIn();
 
-  v_out = GUI_Filter(v_out, v_out_raw);
-  i_out = GUI_Filter(i_out, i_out_raw);
-  v_in = GUI_Filter(v_in, v_in_raw);
-  p_out = GUI_Filter(p_out, v_out * i_out);
+  v_out = GUI_FilterVout(v_out, v_out_raw);
+  i_out = GUI_FilterEMA(i_out, i_out_raw);
+  v_in = GUI_FilterEMA(v_in, v_in_raw);
+  p_out = GUI_FilterEMA(p_out, v_out * i_out);
 
   float v_display = v_target_local;
   float i_display = i_target_local;

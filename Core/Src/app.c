@@ -58,10 +58,6 @@ uint32_t currentPower = 0;
 uint32_t APP_GetPower() { return currentPower; }
 
 void APP_Run() {
-
-  TCPP_SetPDOSelectionMethod(PDO_SEL_METHOD_MAX_PWR);
-  TCPP_Init();
-
   uint8_t pdosnum = DPM_Ports[USBPD_PORT_0].DPM_NumberOfRcvSRCPDO;
 
   for (uint32_t i = 0; i < pdosnum; i++) {
