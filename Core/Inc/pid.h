@@ -3,17 +3,36 @@
 
 #include "main.h"
 
-// --- KONFIGURACJA HRTIM ---
-#define HRTIM_PERIOD 34000
+typedef enum {
+  PID_CONTROL_MODE_OFF = 0,
+  PID_CONTROL_MODE_CV,
+  PID_CONTROL_MODE_CC
+} PID_ControlMode_t;
 
-// 0 PWM przy wyjściu OFF / 0V.
-#define PWM_MIN 0
-#define PWM_MAX 34000
+// --- KONFIGURACJA CZESTOTLIWOSCI ---
+// Jedyne makro, ktore zmieniasz recznie.
+#define PSU_SW_FREQ_KHZ 20UL
+
+#if (PSU_SW_FREQ_KHZ == 0UL)
+#error "PSU_SW_FREQ_KHZ must be greater than 0"
+#endif
+
+enum {
+  // Timer D HRTIM pracuje tutaj z 680000 kHz.
+  HRTIM_PERIOD = (680000UL + (PSU_SW_FREQ_KHZ / 2UL)) / PSU_SW_FREQ_KHZ,
+  // Celujemy mniej wiecej w 4 kHz petli sterowania i probkowania ADC.
+  HRTIM_ADC_DIV = (PSU_SW_FREQ_KHZ <= 4UL)
+                      ? 1UL
+                      : ((PSU_SW_FREQ_KHZ >= 128UL)
+                             ? 32UL
+                             : ((PSU_SW_FREQ_KHZ + 2UL) / 4UL)),
+  // W HAL postscaler=0 oznacza trigger co okres, wiec zapisujemy (div - 1).
+  HRTIM_ADC_POSTSCALER = HRTIM_ADC_DIV - 1UL
+};
 
 // --- NASTAWY ZASILACZA ---
 #define V_TARGET_VOLTAGE 0.0f     // Bezpieczniejszy start
 #define I_TARGET_CURRENT 1.0f     
-#define SOFT_START_STEP  0.005f     // Wolniejszy soft-start jest bezpieczniejszy
 
 // --- KALIBRACJA ADC ---
 #define COEFF_VOLTAGE 0.008682f
@@ -22,14 +41,8 @@
 // --- KOREKCJA KALIBRACJI POMIARU ---
 // Offset napięcia wyłączony zgodnie z życzeniem.
 #define VOUT_CAL_OFFSET_V  (0.0f)
-// Iout: błąd liniowy (1.00A -> 0.95A, 4.00A -> 3.80A) => gain 0.95.
-#define IOUT_CAL_GAIN      (0.95f)
+#define IOUT_CAL_GAIN      (1.0f)
 #define IOUT_CAL_OFFSET_A  (0.0f)
-
-// --- CZĘSTOTLIWOŚĆ PĘTLI REGULACJI ---
-// Dla f_sw=20kHz i ADC postscaler=4 => ~4kHz.
-#define CTRL_LOOP_HZ       (4000.0f)
-
 
 /* Bufor DMA ADC (5 kanałów) */
 extern uint16_t adc_raw[5];
@@ -61,5 +74,6 @@ float PID_GetIIn(void);
 
 float PID_GetCurrentSetpoint(void);
 float PID_GetPWM(void);
+PID_ControlMode_t PID_GetControlMode(void);
 
 #endif /* PID_H */

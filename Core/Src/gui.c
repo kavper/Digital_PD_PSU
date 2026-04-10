@@ -5,16 +5,15 @@
 #include "pid.h"
 #include "ssd1306.h"
 #include "ssd1306_fonts.h"
+#include <math.h>
 #include <stdbool.h>
 #include <stdio.h>
 
-#include <math.h>
-
 #define GUI_FILTER_ALPHA 0.5f
 #define BTN_DEBOUNCE_MS 50u
-
-#define GUI_V_SNAP_TO_SET   0.01f   // 10 mV
-#define GUI_V_DEADBAND      0.02f   // 20 mV (trzymanie wskazania)
+#define GUI_V_SNAP_TO_SET 0.01f
+#define GUI_V_DEADBAND 0.02f
+#define GUI_MODE_AUTOFOLLOW_MS 1200u
 
 static float v_out = 0.0f;
 static float i_out = 0.0f;
@@ -30,6 +29,9 @@ volatile uint8_t aux2_click = 0;
 static volatile uint32_t enc_last_ms  = 0;
 static volatile uint32_t aux1_last_ms = 0;
 static volatile uint32_t aux2_last_ms = 0;
+static uint32_t last_manual_focus_ms = 0;
+static uint8_t pid_focus_pending = 0;
+static PID_ControlMode_t last_pid_mode = PID_CONTROL_MODE_CV;
 
 static inline void debounce_set_flag(volatile uint8_t *flag,
                                      volatile uint32_t *last_ms)
@@ -43,35 +45,33 @@ static inline void debounce_set_flag(volatile uint8_t *flag,
   }
 }
 
-static inline float GUI_FilterEMA(float prev, float in) {
-  return prev + GUI_FILTER_ALPHA * (in - prev);
-}
-
-static inline float GUI_FilterVout(float prev, float in)
-{
+static inline float GUI_FilterVout(float prev, float in) {
   float cand = in;
 
-  // 1) Snap do wartości ustawionej (SET) z dokładnością 10 mV
-  //    Natychmiast, bez EMA, żeby nie było "działa po czasie".
   if (fabsf(cand - v_target_local) <= GUI_V_SNAP_TO_SET) {
     return v_target_local;
   }
 
-  // 2) Deadband tylko dla napięcia: jeśli zmiana mała, nie ruszaj wyświetlanej wartości
   if (fabsf(cand - prev) < GUI_V_DEADBAND) {
     return prev;
   }
 
-  // 3) EMA
   return prev + GUI_FILTER_ALPHA * (cand - prev);
 }
 
+static PID_ControlMode_t GUI_GetDisplayControlMode(void) {
+  PID_ControlMode_t mode = PID_GetControlMode();
+
+  if (mode == PID_CONTROL_MODE_CC) {
+    return PID_CONTROL_MODE_CC;
+  }
+
+  return PID_CONTROL_MODE_CV;
+}
 
 static uint8_t enc_synced = 0;
 
 /* ================== KONFIGURACJA ================== */
-#define BTN_DEBOUNCE_MS 50u
-
 static const float EDIT_STEPS[] = {10.0f, 1.0f, 0.1f, 0.01f};
 #define EDIT_STEP_COUNT (sizeof(EDIT_STEPS) / sizeof(EDIT_STEPS[0]))
 
@@ -91,6 +91,24 @@ static float i_target_local = 1.0f;
 
 /* 0–3: V (10,1,0.1,0.01), 4–7: I (10,1,0.1,0.01) */
 static uint8_t edit_pos = 0;
+
+static uint8_t GUI_GetUnitsCursorForMode(PID_ControlMode_t mode) {
+  return (mode == PID_CONTROL_MODE_CC) ? 5u : 1u;
+}
+
+static void GUI_HoldManualFocus(void) {
+  last_manual_focus_ms = HAL_GetTick();
+}
+
+static void GUI_SetEditSelection(uint8_t new_edit_pos) {
+  edit_pos = new_edit_pos % 8u;
+  gui_mode = (edit_pos < 4u) ? GUI_EDIT_V : GUI_EDIT_I;
+}
+
+static void GUI_ApplyAutoFocus(PID_ControlMode_t mode) {
+  GUI_SetEditSelection(GUI_GetUnitsCursorForMode(mode));
+  enc_last = TIM1->CNT / 4;
+}
 
 /* ================== PROSTE BUTTON HANDLING ================== */
 typedef struct {
@@ -206,13 +224,17 @@ static void GUI_SetOutputEnabled(bool en) {
 }
 
 /* ================== LOGIKA ENKODERA ================== */
-void GUI_HandleEncoder(void) {
+static void GUI_HandleEncoder(void) {
   int32_t cnt = TIM1->CNT / 4;
   int32_t delta = cnt - enc_last;
 
   if (delta == 0)
     return;
   enc_last = cnt;
+
+  if (gui_mode != GUI_VIEW) {
+    GUI_HoldManualFocus();
+  }
 
   if (edit_pos < 4) {
     float step = EDIT_STEPS[edit_pos];
@@ -243,15 +265,17 @@ void GUI_HandleEncoder(void) {
 static void GUI_DrawMain(void) {
   char buf[32];
   ssd1306_Fill(Black);
+  PID_ControlMode_t pid_mode = GUI_GetDisplayControlMode();
 
   float v_out_raw = PID_GetVOut();
   float i_out_raw = PID_GetIOut();
   float v_in_raw = PID_GetVIn();
 
+  // Napięcie na ekranie jest lekko wygładzone dla czytelności.
   v_out = GUI_FilterVout(v_out, v_out_raw);
-  i_out = GUI_FilterEMA(i_out, i_out_raw);
-  v_in = GUI_FilterEMA(v_in, v_in_raw);
-  p_out = GUI_FilterEMA(p_out, v_out * i_out);
+  i_out = i_out_raw;
+  v_in = v_in_raw;
+  p_out = v_out * i_out;
 
   float v_display = v_target_local;
   float i_display = i_target_local;
@@ -296,10 +320,17 @@ static void GUI_DrawMain(void) {
   ssd1306_Line(0, 85, 127, 85, White);
   ssd1306_Line(64, 85, 64, 128, White);
 
+  const bool active_v_box =
+      (gui_mode == GUI_VIEW) ? (pid_mode != PID_CONTROL_MODE_CC)
+                             : (gui_mode == GUI_EDIT_V);
+  const bool active_i_box =
+      (gui_mode == GUI_VIEW) ? (pid_mode == PID_CONTROL_MODE_CC)
+                             : (gui_mode == GUI_EDIT_I);
+
   SSD1306_COLOR  txt_v;
   SSD1306_COLOR  txt_i;
 
-  if (gui_mode == GUI_EDIT_V) {
+  if (active_v_box) {
     txt_v = Black;
     GUI_FillRect(0, 86, 63, 42, White);
   } else {
@@ -307,7 +338,7 @@ static void GUI_DrawMain(void) {
     txt_v = White;
   }
 
-  if (gui_mode == GUI_EDIT_I) {
+  if (active_i_box) {
     txt_i = Black;
     GUI_FillRect(65, 86, 63, 42, White);
   } else {
@@ -321,8 +352,10 @@ static void GUI_DrawMain(void) {
   snprintf(buf, sizeof(buf), "%02d.%02d", INT_P(v_display), FRAC_P(v_display));
   ssd1306_WriteString(buf, Font_16x15, txt_v);
 
-  if (gui_mode == GUI_EDIT_V) {
-    GUI_DrawDigitUnderline(10, 123, edit_pos, txt_v);
+  if (active_v_box) {
+    uint8_t v_cursor =
+        (gui_mode == GUI_EDIT_V) ? edit_pos : GUI_GetUnitsCursorForMode(pid_mode);
+    GUI_DrawDigitUnderline(10, 123, v_cursor, txt_v);
   }
 
   ssd1306_SetCursor(72, 91);
@@ -332,8 +365,11 @@ static void GUI_DrawMain(void) {
   snprintf(buf, sizeof(buf), "%02d.%02d", INT_P(i_display), FRAC_P(i_display));
   ssd1306_WriteString(buf, Font_16x15, txt_i);
 
-  if (gui_mode == GUI_EDIT_I) {
-    GUI_DrawDigitUnderline(74, 123, edit_pos - 4, txt_i);
+  if (active_i_box) {
+    uint8_t i_cursor = (gui_mode == GUI_EDIT_I)
+                           ? (edit_pos - 4u)
+                           : (GUI_GetUnitsCursorForMode(pid_mode) - 4u);
+    GUI_DrawDigitUnderline(74, 123, i_cursor, txt_i);
   }
 
   ssd1306_UpdateScreen();
@@ -364,7 +400,10 @@ void GUI_Init(void) {
   PID_SetTargetCurrent(i_target_local);
 
   gui_mode = GUI_VIEW;
-  edit_pos = 0;
+  edit_pos = GUI_GetUnitsCursorForMode(GUI_GetDisplayControlMode());
+  last_manual_focus_ms = 0u;
+  pid_focus_pending = 0u;
+  last_pid_mode = GUI_GetDisplayControlMode();
 
   /* HARD OFF na starcie */
   GUI_SetOutputEnabled(false);
@@ -372,6 +411,8 @@ void GUI_Init(void) {
 
 void GUI_Process(void) {
   static uint32_t last_draw_ms = 0;
+  uint32_t now = HAL_GetTick();
+  PID_ControlMode_t pid_mode = GUI_GetDisplayControlMode();
 
   static btn_t btn_enc;
   static btn_t btn_aux1;
@@ -399,6 +440,10 @@ void GUI_Process(void) {
     /* Twardo OFF */
     HAL_GPIO_WritePin(DRV_EN_GPIO_Port, DRV_EN_Pin, GPIO_PIN_RESET);
     output_enabled = false;
+    last_manual_focus_ms = now;
+    pid_focus_pending = 0u;
+    last_pid_mode = pid_mode;
+    edit_pos = GUI_GetUnitsCursorForMode(pid_mode);
 
     /* I tyle. Wracamy, żeby nic nie ruszyć w tym cyklu. */
     return;
@@ -414,28 +459,43 @@ void GUI_Process(void) {
 
   /* Edycja pozycji cyfry */
   if (gui_mode == GUI_VIEW) {
-    if (aux1_click || aux2_click) {
-      edit_pos = 0;
-      gui_mode = GUI_EDIT_V;
+    edit_pos = GUI_GetUnitsCursorForMode(pid_mode);
+    pid_focus_pending = 0u;
 
+    if (aux1_click || aux2_click) {
       /* UWAGA: nie bierz PID_GetCurrentSetpoint() bo to robi “SET 30V” */
       v_target_local = PID_GetTargetVoltage();
       i_target_local = PID_GetTargetCurrent();
 
-      enc_last = TIM1->CNT / 4;
+      GUI_ApplyAutoFocus(pid_mode);
+      GUI_HoldManualFocus();
+      aux1_click = 0;
+      aux2_click = 0;
     }
   } else {
     if (aux1_click) {
-      edit_pos = (edit_pos + 1) % 8;
+      GUI_SetEditSelection((uint8_t)(edit_pos + 1u));
+      GUI_HoldManualFocus();
       aux1_click = 0;
     }
     if (aux2_click) {
-      edit_pos = (edit_pos + 7) % 8;
+      GUI_SetEditSelection((uint8_t)(edit_pos + 7u));
+      GUI_HoldManualFocus();
       aux2_click = 0;
     }
 
-    gui_mode = (edit_pos < 4) ? GUI_EDIT_V : GUI_EDIT_I;
+    if (pid_mode != last_pid_mode) {
+      pid_focus_pending = 1u;
+    }
+
+    if (pid_focus_pending &&
+        ((uint32_t)(now - last_manual_focus_ms) >= GUI_MODE_AUTOFOLLOW_MS)) {
+      GUI_ApplyAutoFocus(pid_mode);
+      pid_focus_pending = 0u;
+    }
   }
+
+  last_pid_mode = pid_mode;
 
   if ((HAL_GetTick() - last_draw_ms) < 30u) {
     return;

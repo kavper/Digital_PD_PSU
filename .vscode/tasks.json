@@ -2,18 +2,13 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "Build Debug",
+      "label": "Configure Debug",
       "type": "shell",
       "command": "cmake",
       "args": [
-        "--build",
         "--preset",
         "Debug"
       ],
-      "group": {
-        "kind": "build",
-        "isDefault": true
-      },
       "presentation": {
         "panel": "shared",
         "clear": true,
@@ -21,6 +16,38 @@
       },
       "runOptions": {
         "instanceLimit": 1
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Compile Debug",
+      "type": "shell",
+      "command": "cmake",
+      "args": [
+        "--build",
+        "--preset",
+        "Debug"
+      ],
+      "presentation": {
+        "panel": "shared",
+        "clear": true,
+        "showReuseMessage": false
+      },
+      "runOptions": {
+        "instanceLimit": 1
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Build Debug",
+      "dependsOn": [
+        "Configure Debug",
+        "Compile Debug"
+      ],
+      "dependsOrder": "sequence",
+      "group": {
+        "kind": "build",
+        "isDefault": true
       },
       "problemMatcher": []
     },

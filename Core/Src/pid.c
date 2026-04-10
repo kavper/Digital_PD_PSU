@@ -10,8 +10,14 @@
 // ==========================================
 
 // Sterowanie pracuje w callbacku ADC.
-#define CTRL_FS_HZ (CTRL_LOOP_HZ)
+#define CTRL_FS_HZ \
+  ((1000.0f * (float)PSU_SW_FREQ_KHZ) / (float)(HRTIM_ADC_POSTSCALER + 1UL))
 #define CTRL_TS_S  (1.0f / CTRL_FS_HZ)
+
+// 0 PWM przy wyjsciu OFF / 0V.
+#define PWM_MIN            10U
+#define PWM_HEADROOM_TICKS (HRTIM_PERIOD / 34U)
+#define PWM_MAX            (HRTIM_PERIOD - PWM_HEADROOM_TICKS)
 
 // Strojenie regulatorów (jednostka wyjścia: "ticks" PWM).
 // CV = stabilizacja napięcia, CC = stabilizacja prądu.
@@ -25,28 +31,28 @@
 #define PI_AW_GAIN (0.25f)
 
 // Soft-start i rampy nastaw.
-#define V_SOFTSTART_RATE_V_PER_S (200.0f)
-#define V_SLEW_UP_RATE_V_PER_S   (200.0f)
-#define V_SLEW_DN_RATE_V_PER_S   (200.0f)
-#define I_SLEW_RATE_A_PER_S      (5.0f)
+
+#define V_SOFTSTART_RATE_V_PER_S (600.0f)
+#define V_SLEW_UP_RATE_V_PER_S   (1200.0f)
+#define V_SLEW_DN_RATE_V_PER_S   (1200.0f)
+#define I_SLEW_RATE_A_PER_S      (40.0f)
 
 // Stabilizacja trybu CV/CC.
 #define MODE_HYST_PWM_TICKS (120.0f)
 
 // Tłumienie skoków sterowania.
-#define PWM_SLEW_UP_TICKS_PER_CYCLE (320.0f)
-#define PWM_SLEW_DN_TICKS_PER_CYCLE (320.0f)
+#define PWM_SLEW_UP_TICKS_PER_CYCLE (1200.0f)
+#define PWM_SLEW_DN_TICKS_PER_CYCLE (900.0f)
 #define PWM_FAST_PULLDOWN_TICKS     (900.0f)
-#define PWM_CC_UP_TICKS_PER_CYCLE   (520.0f)
+#define PWM_CC_UP_TICKS_PER_CYCLE   (1400.0f)
+#define CV_TRACK_ALPHA              (0.35f)
 
 // Miękki filtr pomiarów (EMA).
 #define FILT_ALPHA_V (0.22f)
 #define FILT_ALPHA_I (0.26f)
 
-// Dodatkowe zachowanie przy zwarciu / przeciążeniu.
-#define SHORT_VOUT_THRESHOLD_V (0.55f)
-#define SHORT_I_MARGIN_A       (0.05f)
-#define OC_TRIP_HOLD_TIME_S    (0.0015f)
+// Dodatkowe zachowanie przy przeciążeniu.
+#define OC_TRIP_HOLD_TIME_S    (0.0002f)
 #define CC_INT_BAND_MIN_A      (0.012f)
 
 // Limit całki (zabezpieczenie przed nasyceniem)
@@ -80,6 +86,7 @@ static float pwm_cmd = (float)PWM_MIN;
 static bool  cc_mode_latched = false;
 static bool  prev_output_on = false;
 static uint16_t oc_trip_hold_cycles = 0u;
+static PID_ControlMode_t control_mode = PID_CONTROL_MODE_OFF;
 
 // Uchwyty
 HRTIM_HandleTypeDef *hrtim_ptr = NULL;
@@ -139,6 +146,10 @@ float PID_GetPWM(void) {
     return (float)cmp1 / (float)HRTIM_PERIOD;
 }
 
+PID_ControlMode_t PID_GetControlMode(void) {
+    return control_mode;
+}
+
 // ==========================================
 // RESET (bezpieczny)
 // ==========================================
@@ -151,6 +162,7 @@ void PID_Reset(void) {
     current_setpoint_v = 0.0f;
     cc_mode_latched = false;
     oc_trip_hold_cycles = 0u;
+    control_mode = PID_CONTROL_MODE_OFF;
 
     if (hrtim_ptr) {
         hrtim_ptr->Instance->sTimerxRegs[HRTIM_TIMERINDEX_TIMER_D].CMP1xR = (uint32_t)PWM_MIN;
@@ -191,6 +203,7 @@ void PID_Init(ADC_HandleTypeDef *hadc, HRTIM_HandleTypeDef *hhrtim) {
     cc_mode_latched = false;
     prev_output_on = false;
     oc_trip_hold_cycles = 0u;
+    control_mode = PID_CONTROL_MODE_OFF;
 
     // Bezpieczny start: bez napięcia
     target_voltage = 0.0f;
@@ -246,6 +259,7 @@ void PID_HandleInterrupt(void) {
         cc_mode_latched = false;
         prev_output_on = output_on;
         oc_trip_hold_cycles = 0u;
+        control_mode = PID_CONTROL_MODE_OFF;
 
         if (hrtim_ptr) {
             hrtim_ptr->Instance->sTimerxRegs[HRTIM_TIMERINDEX_TIMER_D].CMP1xR = (uint32_t)PWM_MIN;
@@ -304,48 +318,29 @@ void PID_HandleInterrupt(void) {
     const float u_cc = pwm_ff + (CC_KP * err_i) + cc_integral;
     const float u_cc_clamped = clamp(u_cc, (float)PWM_MIN, (float)PWM_MAX);
 
-    // Adaptacyjne progi pod małe i duże limity prądu (ważne dla LED 20mA).
     const float cc_enter_margin = fmaxf(0.0015f, 0.04f * i_set_slewed);
     const float cc_exit_margin  = fmaxf(0.0030f, 0.08f * i_set_slewed);
     const float oc_hard_margin  = fmaxf(0.0030f, 0.10f * i_set_slewed);
     const bool over_i_enter = (i_out_fast > (i_set_slewed + cc_enter_margin));
     const bool under_i_exit = (i_out < (i_set_slewed - cc_exit_margin));
 
-    // 7) Histereza selektora CV/CC (kto niżej) + próg prądowy.
-    if (cc_mode_latched) {
-        if ((u_cc_clamped > (u_cv + MODE_HYST_PWM_TICKS)) && under_i_exit) {
-            cc_mode_latched = false;
-        }
-    } else {
-        if ((u_cc_clamped < (u_cv - MODE_HYST_PWM_TICKS)) && over_i_enter) {
-            cc_mode_latched = true;
-        }
-    }
-
-    // Zwarcie: preferuj CC.
-    const bool short_like =
-        (v_out < SHORT_VOUT_THRESHOLD_V) &&
-        (i_out_fast > (i_set_slewed - SHORT_I_MARGIN_A)) &&
-        (i_set_slewed > 0.1f) &&
-        (v_set_slewed > 1.0f);
-    if (short_like) {
+    if (over_i_enter) {
         cc_mode_latched = true;
+    } else if (cc_mode_latched && under_i_exit) {
+        cc_mode_latched = false;
+        oc_trip_hold_cycles = 0u;
     }
 
     float final_unsat = cc_mode_latched ? u_cc : u_cv;
     float final_pwm = clamp(final_unsat, (float)PWM_MIN, (float)PWM_MAX);
 
-    // Gdy prąd przekracza limit, bezwzględnie przejdź na tor CC (bez czekania na histerezę).
     if (over_i_enter) {
         final_pwm = fminf(final_pwm, u_cc_clamped);
     }
 
-    // Szybkie docięcie przy twardym overcurrent.
     if (i_out_fast > (i_set_slewed + oc_hard_margin)) {
         final_pwm -= PWM_FAST_PULLDOWN_TICKS;
         final_pwm = clamp(final_pwm, (float)PWM_MIN, (float)PWM_MAX);
-
-        // Krótki hold po twardym nadprądzie, żeby nie było "klikania" i pików.
         oc_trip_hold_cycles = (uint16_t)(OC_TRIP_HOLD_TIME_S * CTRL_FS_HZ);
     }
     if (oc_trip_hold_cycles > 0u) {
@@ -354,14 +349,12 @@ void PID_HandleInterrupt(void) {
         oc_trip_hold_cycles--;
     }
 
-    // 8) Slew-rate limit PWM (mniej skoków i dzwonienia).
+    // 7) Slew-rate limit PWM.
     float slew_up_ticks = PWM_SLEW_UP_TICKS_PER_CYCLE;
     float slew_dn_ticks = PWM_SLEW_DN_TICKS_PER_CYCLE;
     if (over_i_enter) {
-        // Gdy prąd jest za wysoki, nie pozwalaj PWM rosnąć.
         slew_up_ticks = 0.0f;
     } else if (cc_mode_latched && (err_i > 0.0f)) {
-        // W CC, gdy prąd jest poniżej limitu, pozwól szybciej dojść do setpointu.
         slew_up_ticks = PWM_CC_UP_TICKS_PER_CYCLE;
     }
 
@@ -373,21 +366,19 @@ void PID_HandleInterrupt(void) {
     );
     final_pwm = pwm_cmd;
 
-    // 9) Anti-windup + prowadzenie całek.
+    // 8) Anti-windup + prowadzenie całek.
     const float aw = PI_AW_GAIN * (final_pwm - final_unsat);
     if (cc_mode_latched) {
-        // W CC: całkuj tylko blisko punktu pracy (mniej oscylacji i "nakręcania").
         const float cc_int_band = fmaxf(CC_INT_BAND_MIN_A, 0.15f * i_set_slewed);
         if (fabsf(err_i) < cc_int_band) {
             cc_integral += (CC_KI * err_i * CTRL_TS_S) + aw;
         } else {
             cc_integral += aw;
         }
-        cv_integral = final_pwm - pwm_ff - (CV_KP * err_v);
+        const float cv_track_target = final_pwm - pwm_ff - (CV_KP * err_v);
+        cv_integral += CV_TRACK_ALPHA * (cv_track_target - cv_integral);
     } else {
-        // CV normalnie reguluje napięcie.
         cv_integral += (CV_KI * err_v * CTRL_TS_S) + aw;
-        // Poza CC ustaw tor CC tuż nad torem CV (bez dążenia do limitu prądu).
         const float cc_track_target =
             final_pwm - pwm_ff - (CC_KP * err_i) + (MODE_HYST_PWM_TICKS * 0.6f);
         cc_integral += 0.12f * (cc_track_target - cc_integral);
@@ -395,8 +386,10 @@ void PID_HandleInterrupt(void) {
 
     cv_integral = clamp(cv_integral, -PID_INTEGRAL_MAX, PID_INTEGRAL_MAX);
     cc_integral = clamp(cc_integral, -PID_INTEGRAL_MAX, PID_INTEGRAL_MAX);
+    control_mode = cc_mode_latched ? PID_CONTROL_MODE_CC : PID_CONTROL_MODE_CV;
 
-    // 10) Zapis PWM + trigger ADC.
+    // 9) Zapis PWM + trigger ADC.
+
     final_pwm = clamp(final_pwm, (float)PWM_MIN, (float)PWM_MAX);
     uint32_t u32_pwm = (uint32_t)final_pwm;
 

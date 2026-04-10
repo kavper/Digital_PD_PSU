@@ -7,6 +7,7 @@
             "request": "launch",
             "origin": "snippet",
             "cwd": "${workspaceFolder}",
+            "preLaunchTask": "Build Debug",
             "preBuild": "${command:st-stm32-ide-debug-launch.build}",
             "runEntry": "main",
             "imagesAndSymbols": [
@@ -27,7 +28,7 @@
             "type": "node-terminal",
             "request": "launch",
             "cwd": "${workspaceFolder}",
-            "command": "(cmake --build --preset Debug && \"/Applications/STM32CubeIDE.app/Contents/Eclipse/plugins/com.st.stm32cube.ide.mcu.externaltools.cubeprogrammer.macos64_2.2.200.202503041107/tools/bin/STM32_Programmer_CLI\" -c port=SWD -w \"${workspaceFolder}/build/Debug/blynk.elf\" -v -rst); exit"
+            "command": "(cmake --preset Debug && cmake --build --preset Debug && \"/Applications/STM32CubeIDE.app/Contents/Eclipse/plugins/com.st.stm32cube.ide.mcu.externaltools.cubeprogrammer.macos64_2.2.200.202503041107/tools/bin/STM32_Programmer_CLI\" -c port=SWD -w \"${workspaceFolder}/build/Debug/blynk.elf\" -v -rst); exit"
         }
     ]
 }
