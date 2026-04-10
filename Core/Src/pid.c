@@ -96,6 +96,14 @@ ADC_HandleTypeDef   *adc_ptr   = NULL;
 // FUNKCJE POMOCNICZE
 // ==========================================
 
+static inline void debug_pin_set(GPIO_PinState state) {
+#if (PID_DEBUG_PIN_MODE != 0U)
+    HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, state);
+#else
+    (void)state;
+#endif
+}
+
 static inline float clamp(float v, float mn, float mx) {
     if (v < mn) return mn;
     if (v > mx) return mx;
@@ -166,7 +174,6 @@ void PID_Reset(void) {
 
     if (hrtim_ptr) {
         hrtim_ptr->Instance->sTimerxRegs[HRTIM_TIMERINDEX_TIMER_D].CMP1xR = (uint32_t)PWM_MIN;
-
         uint32_t cmp3 = ((uint32_t)PWM_MIN) / 2u;
         if (cmp3 < 200u) cmp3 = 200u;
         hrtim_ptr->Instance->sTimerxRegs[HRTIM_TIMERINDEX_TIMER_D].CMP3xR = cmp3;
@@ -178,11 +185,18 @@ void PID_Reset(void) {
 // ==========================================
 void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc) {
     if (hadc->Instance == ADC1) {
+#if (PID_DEBUG_PIN_MODE == 1U)
+        debug_pin_set(GPIO_PIN_SET);
+#endif
         // 1. Oblicz PID
         PID_HandleInterrupt();
 
         // 2. Restart ADC
         PID_AdcRestartDMA();
+
+#if (PID_DEBUG_PIN_MODE == 1U)
+        debug_pin_set(GPIO_PIN_RESET);
+#endif
     }
 }
 
@@ -212,7 +226,6 @@ void PID_Init(ADC_HandleTypeDef *hadc, HRTIM_HandleTypeDef *hhrtim) {
     // Ustaw PWM na minimum
     if (hrtim_ptr) {
         hrtim_ptr->Instance->sTimerxRegs[HRTIM_TIMERINDEX_TIMER_D].CMP1xR = PWM_MIN;
-
         uint32_t cmp3 = ((uint32_t)PWM_MIN) / 2u;
         if (cmp3 < 200u) cmp3 = 200u;
         hrtim_ptr->Instance->sTimerxRegs[HRTIM_TIMERINDEX_TIMER_D].CMP3xR = cmp3;
@@ -231,6 +244,10 @@ void PID_Init(ADC_HandleTypeDef *hadc, HRTIM_HandleTypeDef *hhrtim) {
 // GŁÓWNA PĘTLA REGULACJI
 // ==========================================
 void PID_HandleInterrupt(void) {
+#if (PID_DEBUG_PIN_MODE == 2U)
+    debug_pin_set(GPIO_PIN_SET);
+#endif
+
     // 1) Pomiary + filtracja.
     const float v_in_raw    = (float)adc_raw[0] * COEFF_VOLTAGE;
     const float v_out_raw   = (float)adc_raw[1] * COEFF_VOLTAGE;
@@ -263,11 +280,13 @@ void PID_HandleInterrupt(void) {
 
         if (hrtim_ptr) {
             hrtim_ptr->Instance->sTimerxRegs[HRTIM_TIMERINDEX_TIMER_D].CMP1xR = (uint32_t)PWM_MIN;
-
             uint32_t cmp3 = ((uint32_t)PWM_MIN) / 2u;
             if (cmp3 < 200u) cmp3 = 200u;
             hrtim_ptr->Instance->sTimerxRegs[HRTIM_TIMERINDEX_TIMER_D].CMP3xR = cmp3;
         }
+#if (PID_DEBUG_PIN_MODE == 2U)
+        debug_pin_set(GPIO_PIN_RESET);
+#endif
         return;
     }
 
@@ -323,6 +342,7 @@ void PID_HandleInterrupt(void) {
     const float oc_hard_margin  = fmaxf(0.0030f, 0.10f * i_set_slewed);
     const bool over_i_enter = (i_out_fast > (i_set_slewed + cc_enter_margin));
     const bool under_i_exit = (i_out < (i_set_slewed - cc_exit_margin));
+    const bool hard_over_i = (i_out_fast > (i_set_slewed + oc_hard_margin));
 
     if (over_i_enter) {
         cc_mode_latched = true;
@@ -338,13 +358,14 @@ void PID_HandleInterrupt(void) {
         final_pwm = fminf(final_pwm, u_cc_clamped);
     }
 
-    if (i_out_fast > (i_set_slewed + oc_hard_margin)) {
-        final_pwm -= PWM_FAST_PULLDOWN_TICKS;
-        final_pwm = clamp(final_pwm, (float)PWM_MIN, (float)PWM_MAX);
+    if (hard_over_i) {
+        final_pwm = (float)PWM_MIN;
+        pwm_cmd = (float)PWM_MIN;
         oc_trip_hold_cycles = (uint16_t)(OC_TRIP_HOLD_TIME_S * CTRL_FS_HZ);
     }
     if (oc_trip_hold_cycles > 0u) {
         final_pwm = (float)PWM_MIN;
+        pwm_cmd = (float)PWM_MIN;
         cc_mode_latched = true;
         oc_trip_hold_cycles--;
     }
@@ -354,17 +375,20 @@ void PID_HandleInterrupt(void) {
     float slew_dn_ticks = PWM_SLEW_DN_TICKS_PER_CYCLE;
     if (over_i_enter) {
         slew_up_ticks = 0.0f;
+        slew_dn_ticks = PWM_FAST_PULLDOWN_TICKS;
     } else if (cc_mode_latched && (err_i > 0.0f)) {
         slew_up_ticks = PWM_CC_UP_TICKS_PER_CYCLE;
     }
 
-    pwm_cmd = slew_towards(
-        pwm_cmd,
-        final_pwm,
-        slew_up_ticks,
-        slew_dn_ticks
-    );
-    final_pwm = pwm_cmd;
+    if (!hard_over_i && (oc_trip_hold_cycles == 0u)) {
+        pwm_cmd = slew_towards(
+            pwm_cmd,
+            final_pwm,
+            slew_up_ticks,
+            slew_dn_ticks
+        );
+        final_pwm = pwm_cmd;
+    }
 
     // 8) Anti-windup + prowadzenie całek.
     const float aw = PI_AW_GAIN * (final_pwm - final_unsat);
@@ -395,12 +419,14 @@ void PID_HandleInterrupt(void) {
 
     if (hrtim_ptr) {
         hrtim_ptr->Instance->sTimerxRegs[HRTIM_TIMERINDEX_TIMER_D].CMP1xR = u32_pwm;
-
-        // 9. Trigger ADC w środku impulsu
         uint32_t cmp3 = u32_pwm / 2u;
         if (cmp3 < 200u) cmp3 = 200u;
         hrtim_ptr->Instance->sTimerxRegs[HRTIM_TIMERINDEX_TIMER_D].CMP3xR = cmp3;
     }
+
+#if (PID_DEBUG_PIN_MODE == 2U)
+    debug_pin_set(GPIO_PIN_RESET);
+#endif
 }
 
 void PID_SetTargetVoltage(float val) {

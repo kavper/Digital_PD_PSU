@@ -13,19 +13,31 @@ typedef enum {
 // Jedyne makro, ktore zmieniasz recznie.
 #define PSU_SW_FREQ_KHZ 20UL
 
+// Dzielnik probkowania ADC/PID:
+// 1 = probkowanie co kazdy okres PWM
+// 2 = co drugi okres PWM
+// 5 = co piaty okres PWM
+#define PSU_ADC_DIV 1UL
+
+// Debug probe na pinie LED:
+// 0 = wylaczone
+// 1 = impuls na czas callbacku ADC
+// 2 = impuls na czas wykonywania PID_HandleInterrupt()
+#define PID_DEBUG_PIN_MODE 2U
+
 #if (PSU_SW_FREQ_KHZ == 0UL)
 #error "PSU_SW_FREQ_KHZ must be greater than 0"
+#endif
+
+#if (PSU_ADC_DIV == 0UL)
+#error "PSU_ADC_DIV must be greater than 0"
 #endif
 
 enum {
   // Timer D HRTIM pracuje tutaj z 680000 kHz.
   HRTIM_PERIOD = (680000UL + (PSU_SW_FREQ_KHZ / 2UL)) / PSU_SW_FREQ_KHZ,
-  // Celujemy mniej wiecej w 4 kHz petli sterowania i probkowania ADC.
-  HRTIM_ADC_DIV = (PSU_SW_FREQ_KHZ <= 4UL)
-                      ? 1UL
-                      : ((PSU_SW_FREQ_KHZ >= 128UL)
-                             ? 32UL
-                             : ((PSU_SW_FREQ_KHZ + 2UL) / 4UL)),
+  // f_adc = f_pwm / PSU_ADC_DIV
+  HRTIM_ADC_DIV = PSU_ADC_DIV,
   // W HAL postscaler=0 oznacza trigger co okres, wiec zapisujemy (div - 1).
   HRTIM_ADC_POSTSCALER = HRTIM_ADC_DIV - 1UL
 };
