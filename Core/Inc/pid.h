@@ -10,20 +10,12 @@ typedef enum {
 } PID_ControlMode_t;
 
 // --- KONFIGURACJA CZESTOTLIWOSCI ---
-// Jedyne makro, ktore zmieniasz recznie.
-#define PSU_SW_FREQ_KHZ 20UL
+#define PSU_SW_FREQ_KHZ 200UL
 
 // Dzielnik probkowania ADC/PID:
-// 1 = probkowanie co kazdy okres PWM
-// 2 = co drugi okres PWM
-// 5 = co piaty okres PWM
-#define PSU_ADC_DIV 1UL
-
-// Debug probe na pinie LED:
-// 0 = wylaczone
-// 1 = impuls na czas callbacku ADC
-// 2 = impuls na czas wykonywania PID_HandleInterrupt()
-#define PID_DEBUG_PIN_MODE 2U
+// 4 = PWM 200 kHz, petla ADC/CV 50 kHz.
+// Proba pracy przez HAL/DMA przy 200 kHz zagladzala while(1) i OLED po ON.
+#define PSU_ADC_DIV 4UL
 
 #if (PSU_SW_FREQ_KHZ == 0UL)
 #error "PSU_SW_FREQ_KHZ must be greater than 0"
@@ -34,8 +26,8 @@ typedef enum {
 #endif
 
 enum {
-  // Timer D HRTIM pracuje tutaj z 680000 kHz.
-  HRTIM_PERIOD = (680000UL + (PSU_SW_FREQ_KHZ / 2UL)) / PSU_SW_FREQ_KHZ,
+  // Timer D HRTIM: 170 MHz * 32 = 5.44 GHz, PER=27200 -> 200 kHz.
+  HRTIM_PERIOD = 27200UL,
   // f_adc = f_pwm / PSU_ADC_DIV
   HRTIM_ADC_DIV = PSU_ADC_DIV,
   // W HAL postscaler=0 oznacza trigger co okres, wiec zapisujemy (div - 1).
@@ -46,18 +38,8 @@ enum {
 #define V_TARGET_VOLTAGE 0.0f     // Bezpieczniejszy start
 #define I_TARGET_CURRENT 1.0f     
 
-// --- KALIBRACJA ADC ---
-#define COEFF_VOLTAGE 0.008682f
-#define COEFF_CURRENT 0.002442f
-
-// --- KOREKCJA KALIBRACJI POMIARU ---
-// Offset napięcia wyłączony zgodnie z życzeniem.
-#define VOUT_CAL_OFFSET_V  (0.0f)
-#define IOUT_CAL_GAIN      (1.0f)
-#define IOUT_CAL_OFFSET_A  (0.0f)
-
-/* Bufor DMA ADC (5 kanałów) */
-extern uint16_t adc_raw[5];
+/* Legacy alias; nowy bufor DMA ma 3 kanaly w app_power.c. */
+extern uint16_t adc_raw[3];
 
 /* Zadane wartości (dla GUI / logiki) */
 extern float current_setpoint_v;   /* aktualny setpoint po rampie */

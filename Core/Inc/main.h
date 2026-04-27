@@ -29,18 +29,6 @@ extern "C" {
 /* Includes ------------------------------------------------------------------*/
 #include "stm32g4xx_hal.h"
 
-#include "stm32g4xx_ll_ucpd.h"
-#include "stm32g4xx_ll_bus.h"
-#include "stm32g4xx_ll_cortex.h"
-#include "stm32g4xx_ll_rcc.h"
-#include "stm32g4xx_ll_system.h"
-#include "stm32g4xx_ll_utils.h"
-#include "stm32g4xx_ll_pwr.h"
-#include "stm32g4xx_ll_gpio.h"
-#include "stm32g4xx_ll_dma.h"
-
-#include "stm32g4xx_ll_exti.h"
-
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 
@@ -73,8 +61,6 @@ void Error_Handler(void);
 /* Private defines -----------------------------------------------------------*/
 #define LED_Pin GPIO_PIN_14
 #define LED_GPIO_Port GPIOC
-#define V_IN_ADC_Pin GPIO_PIN_0
-#define V_IN_ADC_GPIO_Port GPIOA
 #define V_OUT_ADC_Pin GPIO_PIN_1
 #define V_OUT_ADC_GPIO_Port GPIOA
 #define I_OUT_ADC_Pin GPIO_PIN_2
@@ -90,8 +76,6 @@ void Error_Handler(void);
 #define BTN_AUX2_EXTI_IRQn EXTI2_IRQn
 #define BTN_CC_CV_Pin GPIO_PIN_10
 #define BTN_CC_CV_GPIO_Port GPIOB
-#define I_IN_ADC_Pin GPIO_PIN_11
-#define I_IN_ADC_GPIO_Port GPIOB
 #define V_BOOST_ADC_Pin GPIO_PIN_12
 #define V_BOOST_ADC_GPIO_Port GPIOB
 #define DRV_LI_Pin GPIO_PIN_14
@@ -105,8 +89,6 @@ void Error_Handler(void);
 #define ENC_SW_Pin GPIO_PIN_10
 #define ENC_SW_GPIO_Port GPIOA
 #define ENC_SW_EXTI_IRQn EXTI15_10_IRQn
-#define DB_Pin GPIO_PIN_3
-#define DB_GPIO_Port GPIOB
 #define DRV_EN_Pin GPIO_PIN_9
 #define DRV_EN_GPIO_Port GPIOB
 

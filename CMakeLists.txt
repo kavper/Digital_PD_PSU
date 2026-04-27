@@ -46,12 +46,23 @@ target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user sources here
     Core/Src/app.c
-    Core/Src/tcpp.c
+    Core/Src/app_power.c
+    Core/Src/control_2p2z.c
     Core/Src/gui.c
+    Core/Src/hrtim_pwm.c
     Core/Src/pid.c
+    Core/Src/power_measurement.c
     
     Drivers/ssd1306/ssd1306.c
     Drivers/ssd1306/ssd1306_fonts.c
+)
+
+set_source_files_properties(
+    Core/Src/app_power.c
+    Core/Src/control_2p2z.c
+    Core/Src/hrtim_pwm.c
+    Core/Src/power_measurement.c
+    PROPERTIES COMPILE_OPTIONS "-O2"
 )
 
 # Add include paths

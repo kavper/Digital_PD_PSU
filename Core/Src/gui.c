@@ -1,5 +1,6 @@
 #include "gui.h"
 #include "app.h"
+#include "app_power.h"
 #include "logo.h"
 #include "main.h"
 #include "pid.h"
@@ -11,9 +12,11 @@
 
 #define GUI_FILTER_ALPHA 0.5f
 #define BTN_DEBOUNCE_MS 50u
+#define BTN_POLL_FALLBACK_LOCKOUT_MS 150u
 #define GUI_V_SNAP_TO_SET 0.01f
 #define GUI_V_DEADBAND 0.02f
 #define GUI_MODE_AUTOFOLLOW_MS 1200u
+#define GUI_REDRAW_PERIOD_MS 30u
 
 static float v_out = 0.0f;
 static float i_out = 0.0f;
@@ -27,22 +30,31 @@ volatile uint8_t aux1_click = 0;
 volatile uint8_t aux2_click = 0;
 
 static volatile uint32_t enc_last_ms  = 0;
+static volatile uint32_t onoff_last_ms = 0;
 static volatile uint32_t aux1_last_ms = 0;
 static volatile uint32_t aux2_last_ms = 0;
 static uint32_t last_manual_focus_ms = 0;
 static uint8_t pid_focus_pending = 0;
 static PID_ControlMode_t last_pid_mode = PID_CONTROL_MODE_CV;
 
-static inline void debounce_set_flag(volatile uint8_t *flag,
-                                     volatile uint32_t *last_ms)
+static inline void debounce_set_flag_when_pressed(volatile uint8_t *flag,
+                                                  volatile uint32_t *last_ms,
+                                                  GPIO_TypeDef *port,
+                                                  uint16_t pin,
+                                                  GPIO_PinState pressed_state)
 {
   uint32_t now = HAL_GetTick();
 
-  // HAL_GetTick() działa w SysTick (ms). W ISR ok, byle bez długich akcji.
-  if ((uint32_t)(now - *last_ms) >= BTN_DEBOUNCE_MS) {
-    *last_ms = now;
-    *flag = 1;
+  if ((uint32_t)(now - *last_ms) < BTN_DEBOUNCE_MS) {
+    return;
   }
+
+  if (HAL_GPIO_ReadPin(port, pin) != pressed_state) {
+    return;
+  }
+
+  *last_ms = now;
+  *flag = 1;
 }
 
 static inline float GUI_FilterVout(float prev, float in) {
@@ -70,6 +82,9 @@ static PID_ControlMode_t GUI_GetDisplayControlMode(void) {
 }
 
 static uint8_t enc_synced = 0;
+static uint8_t enc_gpio_synced = 0;
+static uint8_t enc_gpio_last = 0;
+static int8_t enc_gpio_accum = 0;
 
 /* ================== KONFIGURACJA ================== */
 static const float EDIT_STEPS[] = {10.0f, 1.0f, 0.1f, 0.01f};
@@ -86,11 +101,14 @@ static gui_mode_t gui_mode = GUI_VIEW;
 static int32_t enc_last = 0;
 
 static bool output_enabled = false;
+static uint8_t gui_force_redraw = 1u;
 
 static float i_target_local = 1.0f;
 
 /* 0–3: V (10,1,0.1,0.01), 4–7: I (10,1,0.1,0.01) */
 static uint8_t edit_pos = 0;
+
+static uint8_t GUI_ReadEncoderAB(void);
 
 static uint8_t GUI_GetUnitsCursorForMode(PID_ControlMode_t mode) {
   return (mode == PID_CONTROL_MODE_CC) ? 5u : 1u;
@@ -103,36 +121,68 @@ static void GUI_HoldManualFocus(void) {
 static void GUI_SetEditSelection(uint8_t new_edit_pos) {
   edit_pos = new_edit_pos % 8u;
   gui_mode = (edit_pos < 4u) ? GUI_EDIT_V : GUI_EDIT_I;
+  gui_force_redraw = 1u;
 }
 
 static void GUI_ApplyAutoFocus(PID_ControlMode_t mode) {
   GUI_SetEditSelection(GUI_GetUnitsCursorForMode(mode));
   enc_last = TIM1->CNT / 4;
+  enc_gpio_last = GUI_ReadEncoderAB();
+  enc_gpio_accum = 0;
+  enc_gpio_synced = 1;
 }
 
 /* ================== PROSTE BUTTON HANDLING ================== */
 typedef struct {
-  uint8_t stable; /* 1=puszczony, 0=wciśnięty */
+  uint8_t stable;
   uint8_t last_raw;
+  uint8_t active_level;
   uint32_t last_change_ms;
 } btn_t;
 
 static void BTN_Init(btn_t *b, uint8_t initial_raw) {
-  b->stable = initial_raw;
-  b->last_raw = initial_raw;
+  uint8_t raw = initial_raw ? 1u : 0u;
+
+  b->stable = raw;
+  b->last_raw = raw;
+  /*
+   * Polarity is detected from the idle state at boot. This keeps the GUI
+   * usable even if CubeMX/IOC pull or edge settings are accidentally changed.
+   */
+  b->active_level = raw ? 0u : 1u;
   b->last_change_ms = HAL_GetTick();
 }
 
 void BTN_enc_handle() {
-  debounce_set_flag(&enc_click, &enc_last_ms);
+  debounce_set_flag_when_pressed(&enc_click, &enc_last_ms,
+                                 ENC_SW_GPIO_Port, ENC_SW_Pin, GPIO_PIN_SET);
+}
+
+void BTN_onoff_handle() {
+  debounce_set_flag_when_pressed(&enc_click, &onoff_last_ms,
+                                 BTN_ONOFF_GPIO_Port, BTN_ONOFF_Pin, GPIO_PIN_RESET);
 }
 
 void BTN_aux1_handle() {
-  debounce_set_flag(&aux1_click, &aux1_last_ms);
+  debounce_set_flag_when_pressed(&aux1_click, &aux1_last_ms,
+                                 BTN_AUX1_GPIO_Port, BTN_AUX1_Pin, GPIO_PIN_RESET);
 }
 
 void BTN_aux2_handle() {
-  debounce_set_flag(&aux2_click, &aux2_last_ms);
+  debounce_set_flag_when_pressed(&aux2_click, &aux2_last_ms,
+                                 BTN_AUX2_GPIO_Port, BTN_AUX2_Pin, GPIO_PIN_RESET);
+}
+
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
+  if (GPIO_Pin == ENC_SW_Pin) {
+    BTN_enc_handle();
+  } else if (GPIO_Pin == BTN_ONOFF_Pin) {
+    BTN_onoff_handle();
+  } else if (GPIO_Pin == BTN_AUX1_Pin) {
+    BTN_aux1_handle();
+  } else if (GPIO_Pin == BTN_AUX2_Pin) {
+    BTN_aux2_handle();
+  }
 }
 
 void BTN_reset() {
@@ -141,7 +191,9 @@ void BTN_reset() {
   aux2_click = 0;
 }
 
-__unused static uint8_t __BTN_CLICK(btn_t *b, uint8_t raw) {
+static uint8_t BTN_Click(btn_t *b, uint8_t raw_state,
+                         volatile uint32_t *last_event_ms) {
+  uint8_t raw = raw_state ? 1u : 0u;
   uint32_t now = HAL_GetTick();
 
   if (raw != b->last_raw) {
@@ -155,8 +207,12 @@ __unused static uint8_t __BTN_CLICK(btn_t *b, uint8_t raw) {
 
   if (raw != b->stable) {
     b->stable = raw;
-    if (b->stable == 0) {
-      return 1; /* click = zbocze opadające */
+    if (b->stable == b->active_level) {
+      if ((uint32_t)(now - *last_event_ms) < BTN_POLL_FALLBACK_LOCKOUT_MS) {
+        return 0;
+      }
+      *last_event_ms = now;
+      return 1;
     }
   }
 
@@ -201,26 +257,71 @@ static void GUI_DrawDigitUnderline(int base_x, int y_line, uint8_t step_idx,
 /* ================== OUTPUT ENABLE (HW) ================== */
 static void GUI_SetOutputEnabled(bool en) {
   if (!en) {
-    /* OFF: najpierw zjedź napięciem (lub reset) */
+    output_enabled = false;
+    gui_force_redraw = 1u;
+
     PID_SetTargetVoltage(0.0f);
     PID_SetTargetCurrent(i_target_local); /* limit prądu zostaje */
-    PID_Reset();
-
-    /* potem wyłącz driver */
-    HAL_GPIO_WritePin(DRV_EN_GPIO_Port, DRV_EN_Pin, GPIO_PIN_RESET);
-
-    output_enabled = false;
+    PSU_Stop();
     return;
   }
 
-  /* ON: najpierw PID_Reset(), potem targety, na końcu enable pin */
-  PID_Reset();
+  output_enabled = true;
+  gui_force_redraw = 1u;
+
   PID_SetTargetVoltage(v_target_local);
   PID_SetTargetCurrent(i_target_local);
+  PSU_Start();
+}
 
-  HAL_GPIO_WritePin(DRV_EN_GPIO_Port, DRV_EN_Pin, GPIO_PIN_SET);
+static uint8_t GUI_ReadEncoderAB(void) {
+  uint8_t a = (HAL_GPIO_ReadPin(ENC_A_GPIO_Port, ENC_A_Pin) == GPIO_PIN_SET) ? 1u : 0u;
+  uint8_t b = (HAL_GPIO_ReadPin(ENC_B_GPIO_Port, ENC_B_Pin) == GPIO_PIN_SET) ? 1u : 0u;
 
-  output_enabled = true;
+  return (uint8_t)((a << 1) | b);
+}
+
+static int32_t GUI_GetEncoderGpioDelta(void) {
+  static const int8_t quad_table[16] = {
+      0, -1, 1, 0,
+      1, 0, 0, -1,
+      -1, 0, 0, 1,
+      0, 1, -1, 0,
+  };
+  uint8_t state = GUI_ReadEncoderAB();
+
+  if (!enc_gpio_synced) {
+    enc_gpio_last = state;
+    enc_gpio_accum = 0;
+    enc_gpio_synced = 1;
+    return 0;
+  }
+
+  if (state == enc_gpio_last) {
+    return 0;
+  }
+
+  int8_t step = quad_table[(uint8_t)((enc_gpio_last << 2) | state)];
+  enc_gpio_last = state;
+
+  if (step == 0) {
+    enc_gpio_accum = 0;
+    return 0;
+  }
+
+  enc_gpio_accum += step;
+
+  if (enc_gpio_accum >= 4) {
+    enc_gpio_accum = 0;
+    return 1;
+  }
+
+  if (enc_gpio_accum <= -4) {
+    enc_gpio_accum = 0;
+    return -1;
+  }
+
+  return 0;
 }
 
 /* ================== LOGIKA ENKODERA ================== */
@@ -228,13 +329,21 @@ static void GUI_HandleEncoder(void) {
   int32_t cnt = TIM1->CNT / 4;
   int32_t delta = cnt - enc_last;
 
-  if (delta == 0)
+  if (delta != 0) {
+    enc_last = cnt;
+    enc_gpio_synced = 0;
+  } else {
+    delta = GUI_GetEncoderGpioDelta();
+  }
+
+  if (delta == 0) {
     return;
-  enc_last = cnt;
+  }
 
   if (gui_mode != GUI_VIEW) {
     GUI_HoldManualFocus();
   }
+  gui_force_redraw = 1u;
 
   if (edit_pos < 4) {
     float step = EDIT_STEPS[edit_pos];
@@ -266,6 +375,9 @@ static void GUI_DrawMain(void) {
   char buf[32];
   ssd1306_Fill(Black);
   PID_ControlMode_t pid_mode = GUI_GetDisplayControlMode();
+  const bool psu_output_enabled = (PSU_IsRunning() != 0U);
+
+  output_enabled = psu_output_enabled;
 
   float v_out_raw = PID_GetVOut();
   float i_out_raw = PID_GetIOut();
@@ -299,7 +411,7 @@ static void GUI_DrawMain(void) {
 
   int x_center = (128 - (6 * 16)) / 2;
 
-  if (!output_enabled) {
+  if (!psu_output_enabled) {
     int x_off = (128 - (3 * 16)) / 2;
     ssd1306_SetCursor(x_off, 35);
     ssd1306_WriteString("OFF", Font_16x24, White);
@@ -378,6 +490,9 @@ static void GUI_DrawMain(void) {
 /* ================== API GLOWNE ================== */
 void GUI_Init(void) {
   enc_synced = 0;
+  enc_gpio_synced = 0;
+  enc_gpio_last = GUI_ReadEncoderAB();
+  enc_gpio_accum = 0;
   enc_last = TIM1->CNT / 4;
 
   ssd1306_Init();
@@ -413,22 +528,48 @@ void GUI_Process(void) {
   static uint32_t last_draw_ms = 0;
   uint32_t now = HAL_GetTick();
   PID_ControlMode_t pid_mode = GUI_GetDisplayControlMode();
+  bool psu_output_enabled = (PSU_IsRunning() != 0U);
+
+  if (output_enabled != psu_output_enabled) {
+    output_enabled = psu_output_enabled;
+    gui_force_redraw = 1u;
+  }
 
   static btn_t btn_enc;
+  static btn_t btn_onoff;
   static btn_t btn_aux1;
   static btn_t btn_aux2;
   static uint8_t inited = 0;
 
   if (!inited) {
     BTN_Init(&btn_enc, HAL_GPIO_ReadPin(ENC_SW_GPIO_Port, ENC_SW_Pin));
+    BTN_Init(&btn_onoff, HAL_GPIO_ReadPin(BTN_ONOFF_GPIO_Port, BTN_ONOFF_Pin));
     BTN_Init(&btn_aux1, HAL_GPIO_ReadPin(BTN_AUX1_GPIO_Port, BTN_AUX1_Pin));
     BTN_Init(&btn_aux2, HAL_GPIO_ReadPin(BTN_AUX2_GPIO_Port, BTN_AUX2_Pin));
     inited = 1;
   }
 
+  if (BTN_Click(&btn_enc, HAL_GPIO_ReadPin(ENC_SW_GPIO_Port, ENC_SW_Pin),
+                &enc_last_ms) ||
+      BTN_Click(&btn_onoff, HAL_GPIO_ReadPin(BTN_ONOFF_GPIO_Port, BTN_ONOFF_Pin),
+                &onoff_last_ms)) {
+    enc_click = 1;
+  }
+  if (BTN_Click(&btn_aux1, HAL_GPIO_ReadPin(BTN_AUX1_GPIO_Port, BTN_AUX1_Pin),
+                &aux1_last_ms)) {
+    aux1_click = 1;
+  }
+  if (BTN_Click(&btn_aux2, HAL_GPIO_ReadPin(BTN_AUX2_GPIO_Port, BTN_AUX2_Pin),
+                &aux2_last_ms)) {
+    aux2_click = 1;
+  }
+
     /* Pierwszy cykl: zsynchronizuj enkoder i nie licz delty, bo potrafi strzelić */
   if (!enc_synced) {
     enc_last = TIM1->CNT / 4;
+    enc_gpio_last = GUI_ReadEncoderAB();
+    enc_gpio_accum = 0;
+    enc_gpio_synced = 1;
     enc_synced = 1;
 
     /* Dla pewności: startowe nastawy, żeby GUI nie pokazało śmieci */
@@ -440,6 +581,7 @@ void GUI_Process(void) {
     /* Twardo OFF */
     HAL_GPIO_WritePin(DRV_EN_GPIO_Port, DRV_EN_Pin, GPIO_PIN_RESET);
     output_enabled = false;
+    gui_force_redraw = 1u;
     last_manual_focus_ms = now;
     pid_focus_pending = 0u;
     last_pid_mode = pid_mode;
@@ -454,6 +596,8 @@ void GUI_Process(void) {
   /* ENC: toggle output + hardware pin */
   if (enc_click) {
     GUI_SetOutputEnabled(!output_enabled);
+    psu_output_enabled = (PSU_IsRunning() != 0U);
+    output_enabled = psu_output_enabled;
     enc_click = 0;
   }
 
@@ -469,6 +613,7 @@ void GUI_Process(void) {
 
       GUI_ApplyAutoFocus(pid_mode);
       GUI_HoldManualFocus();
+      gui_force_redraw = 1u;
       aux1_click = 0;
       aux2_click = 0;
     }
@@ -476,11 +621,13 @@ void GUI_Process(void) {
     if (aux1_click) {
       GUI_SetEditSelection((uint8_t)(edit_pos + 1u));
       GUI_HoldManualFocus();
+      gui_force_redraw = 1u;
       aux1_click = 0;
     }
     if (aux2_click) {
       GUI_SetEditSelection((uint8_t)(edit_pos + 7u));
       GUI_HoldManualFocus();
+      gui_force_redraw = 1u;
       aux2_click = 0;
     }
 
@@ -497,10 +644,12 @@ void GUI_Process(void) {
 
   last_pid_mode = pid_mode;
 
-  if ((HAL_GetTick() - last_draw_ms) < 30u) {
+  if ((gui_force_redraw == 0u) &&
+      ((HAL_GetTick() - last_draw_ms) < GUI_REDRAW_PERIOD_MS)) {
     return;
   }
   last_draw_ms = HAL_GetTick();
+  gui_force_redraw = 0u;
 
   GUI_DrawMain();
 }
