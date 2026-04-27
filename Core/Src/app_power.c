@@ -8,10 +8,14 @@
 #include <stdint.h>
 
 #define PSU_VOLTAGE_TARGET_MAX_V (30.0f)
-#define PSU_SOFTSTART_TIME_S     (0.050f)
 #define PSU_CONTROL_FREQ_HZ      ((float)(HRTIM_PWM_FSW_HZ / HRTIM_ADC_DIV))
 #define PSU_DUTY_MAX_START       (0.60f)
 #define PSU_DUTY_MAX_NORMAL      (0.80f)
+#define PSU_ZERO_SETPOINT_V      (0.01f)
+#define PSU_STAGE_DISABLE_V      (0.005f)
+/* 10 V step: ~200 ms up/down at the 50 kHz control rate. */
+#define PSU_SLEW_UP_V_PER_S      (50.0f)
+#define PSU_SLEW_DOWN_V_PER_S    (50.0f)
 
 /*
  * Ostrozny startowy 2P2Z dla fcontrol = 50 kHz.
@@ -42,10 +46,14 @@ uint16_t psu_adc_dma_buffer[PSU_ADC_CHANNEL_COUNT] = {0};
 static DF22_Controller_t psu_cv_controller;
 static PowerMeasurements_t psu_measurements;
 static float psu_target_voltage_v = 0.0f;
+static float psu_slewed_voltage_v = 0.0f;
 static float psu_ref_adc_ramp_v = 0.0f;
 static uint8_t psu_initialized = 0U;
-static uint8_t psu_running = 0U;
+static volatile uint8_t psu_running = 0U;
+static volatile uint8_t psu_control_active = 0U;
+static volatile uint8_t psu_shutdown_pending = 0U;
 static uint8_t psu_adc_dma_running = 0U;
+static uint8_t psu_power_stage_enabled = 0U;
 
 static float psu_clamp(float value, float min_value, float max_value)
 {
@@ -60,10 +68,40 @@ static float psu_clamp(float value, float min_value, float max_value)
 
 static void psu_reset_control(float duty_max)
 {
+  psu_slewed_voltage_v = 0.0f;
   psu_ref_adc_ramp_v = 0.0f;
   DF22_Reset(&psu_cv_controller);
   DF22_SetOutputLimits(&psu_cv_controller, HRTIM_PWM_DUTY_MIN, duty_max);
   HRTIM_PWM_SetDuty(HRTIM_PWM_DUTY_MIN);
+}
+
+static void psu_reset_controller_only(float duty_max)
+{
+  DF22_Reset(&psu_cv_controller);
+  DF22_SetOutputLimits(&psu_cv_controller, HRTIM_PWM_DUTY_MIN, duty_max);
+  HRTIM_PWM_SetDuty(HRTIM_PWM_DUTY_MIN);
+}
+
+static void psu_set_power_stage(uint8_t enabled)
+{
+  if (enabled == 0U) {
+    /*
+     * Do not stop HRTIM outputs here. Output start/stop can expose an HRTIM
+     * latch in the middle of a PWM period; keep PWM running and only gate the
+     * external driver. The timer is stopped later, after DRV_EN is already low.
+     */
+    HAL_GPIO_WritePin(DRV_EN_GPIO_Port, DRV_EN_Pin, GPIO_PIN_RESET);
+    psu_power_stage_enabled = 0U;
+    return;
+  }
+
+  if (psu_power_stage_enabled != 0U) {
+    return;
+  }
+
+  HRTIM_PWM_ForceUpdate();
+  HAL_GPIO_WritePin(DRV_EN_GPIO_Port, DRV_EN_Pin, GPIO_PIN_SET);
+  psu_power_stage_enabled = 1U;
 }
 
 static void psu_start_adc_dma(void)
@@ -98,26 +136,48 @@ static void psu_stop_adc_dma(void)
   psu_adc_dma_running = 0U;
 }
 
-static void psu_update_softstart(float target_adc_v)
+static float psu_step_towards(float value, float target, float step)
 {
-  const float step_scale = 1.0f / (PSU_CONTROL_FREQ_HZ * PSU_SOFTSTART_TIME_S);
-  float step = target_adc_v * step_scale;
-
-  if (step < 0.000001f) {
-    step = 0.000001f;
-  }
-
-  if (psu_ref_adc_ramp_v < target_adc_v) {
-    psu_ref_adc_ramp_v += step;
-    if (psu_ref_adc_ramp_v > target_adc_v) {
-      psu_ref_adc_ramp_v = target_adc_v;
+  if (value < target) {
+    value += step;
+    if (value > target) {
+      value = target;
     }
-  } else if (psu_ref_adc_ramp_v > target_adc_v) {
-    psu_ref_adc_ramp_v -= step;
-    if (psu_ref_adc_ramp_v < target_adc_v) {
-      psu_ref_adc_ramp_v = target_adc_v;
+  } else if (value > target) {
+    value -= step;
+    if (value < target) {
+      value = target;
     }
   }
+
+  return value;
+}
+
+static void psu_update_reference_slew(float target_voltage_v)
+{
+  const float rate_v_per_s =
+      (target_voltage_v >= psu_slewed_voltage_v) ? PSU_SLEW_UP_V_PER_S
+                                                 : PSU_SLEW_DOWN_V_PER_S;
+  const float step_v = rate_v_per_s / PSU_CONTROL_FREQ_HZ;
+
+  psu_slewed_voltage_v =
+      psu_step_towards(psu_slewed_voltage_v, target_voltage_v, step_v);
+
+  if ((target_voltage_v <= PSU_ZERO_SETPOINT_V) &&
+      (psu_slewed_voltage_v <= PSU_STAGE_DISABLE_V)) {
+    psu_slewed_voltage_v = 0.0f;
+  }
+
+  psu_ref_adc_ramp_v = psu_slewed_voltage_v * POWER_VOUT_GAIN;
+}
+
+static void psu_control_shutdown_from_isr(void)
+{
+  psu_reset_control(PSU_DUTY_MAX_START);
+  HRTIM_PWM_ForceUpdate();
+  psu_set_power_stage(0U);
+  psu_control_active = 0U;
+  psu_shutdown_pending = 1U;
 }
 
 void PSU_Init(void)
@@ -127,9 +187,13 @@ void PSU_Init(void)
   }
 
   psu_target_voltage_v = 0.0f;
+  psu_slewed_voltage_v = 0.0f;
   psu_ref_adc_ramp_v = 0.0f;
   psu_running = 0U;
+  psu_control_active = 0U;
+  psu_shutdown_pending = 0U;
   psu_adc_dma_running = 0U;
+  psu_power_stage_enabled = 0U;
 
   DF22_Init(&psu_cv_controller,
             PSU_2P2Z_B0,
@@ -156,17 +220,35 @@ void PSU_Start(void)
     PSU_Init();
   }
 
-  psu_reset_control(PSU_DUTY_MAX_START);
-  psu_start_adc_dma();
-  HRTIM_PWM_Start();
-  HAL_GPIO_WritePin(DRV_EN_GPIO_Port, DRV_EN_Pin, GPIO_PIN_SET);
+  if (psu_control_active == 0U) {
+    psu_reset_control(PSU_DUTY_MAX_START);
+    psu_set_power_stage(0U);
+    psu_start_adc_dma();
+    HRTIM_PWM_ForceUpdate();
+    HRTIM_PWM_StartCounter();
+    HRTIM_PWM_EnableOutputs();
+
+    if (psu_target_voltage_v > PSU_ZERO_SETPOINT_V) {
+      psu_set_power_stage(1U);
+    }
+
+    psu_control_active = 1U;
+  }
+
+  psu_shutdown_pending = 0U;
   psu_running = 1U;
 }
 
 void PSU_Stop(void)
 {
+  psu_target_voltage_v = 0.0f;
   psu_running = 0U;
-  HAL_GPIO_WritePin(DRV_EN_GPIO_Port, DRV_EN_Pin, GPIO_PIN_RESET);
+
+  if (psu_control_active != 0U) {
+    return;
+  }
+
+  psu_set_power_stage(0U);
   psu_reset_control(PSU_DUTY_MAX_START);
   HRTIM_PWM_Stop();
   psu_stop_adc_dma();
@@ -188,22 +270,78 @@ void PSU_ControlLoopFromAdc(const uint16_t adc_samples[PSU_ADC_CHANNEL_COUNT])
                           adc_samples[PSU_ADC_INDEX_IOUT],
                           adc_samples[PSU_ADC_INDEX_VBOOST]);
 
-  if ((psu_running == 0U) || (psu_target_voltage_v <= 0.0f)) {
-    psu_reset_control(PSU_DUTY_MAX_START);
+  if (psu_running == 0U) {
+    if (psu_control_active == 0U) {
+      psu_set_power_stage(0U);
+      psu_reset_control(PSU_DUTY_MAX_START);
+      return;
+    }
+  }
+
+  const float target_voltage_v = (psu_running != 0U) ? psu_target_voltage_v : 0.0f;
+  psu_update_reference_slew(target_voltage_v);
+
+  if ((psu_running == 0U) &&
+      (target_voltage_v <= PSU_ZERO_SETPOINT_V) &&
+      (psu_slewed_voltage_v <= PSU_STAGE_DISABLE_V)) {
+    psu_control_shutdown_from_isr();
     return;
   }
 
-  const float target_adc_v = psu_target_voltage_v * POWER_VOUT_GAIN;
-  psu_update_softstart(target_adc_v);
+  if ((psu_running != 0U) &&
+      (target_voltage_v <= PSU_ZERO_SETPOINT_V) &&
+      (psu_slewed_voltage_v <= PSU_STAGE_DISABLE_V)) {
+    psu_reset_controller_only(PSU_DUTY_MAX_START);
+    HRTIM_PWM_ForceUpdate();
+    psu_set_power_stage(0U);
+    return;
+  }
+
+  if (psu_slewed_voltage_v <= PSU_STAGE_DISABLE_V) {
+    psu_reset_controller_only(PSU_DUTY_MAX_START);
+    HRTIM_PWM_ForceUpdate();
+
+    if ((psu_running != 0U) && (target_voltage_v > PSU_ZERO_SETPOINT_V)) {
+      psu_set_power_stage(1U);
+    } else {
+      psu_set_power_stage(0U);
+    }
+
+    return;
+  }
 
   const float error_adc_v = psu_ref_adc_ramp_v - psu_measurements.vout_adc_v;
+
+  if (psu_power_stage_enabled == 0U) {
+    psu_reset_controller_only(PSU_DUTY_MAX_START);
+  }
+
+  float duty_max = PSU_DUTY_MAX_START;
+  if ((psu_running != 0U) &&
+      (psu_target_voltage_v > PSU_ZERO_SETPOINT_V) &&
+      (psu_slewed_voltage_v >= psu_target_voltage_v)) {
+    duty_max = PSU_DUTY_MAX_NORMAL;
+  }
+  DF22_SetOutputLimits(&psu_cv_controller, HRTIM_PWM_DUTY_MIN, duty_max);
+
   const float duty = DF22_Update(&psu_cv_controller, error_adc_v);
 
   HRTIM_PWM_SetDuty(duty);
 
-  if (psu_ref_adc_ramp_v >= target_adc_v) {
-    DF22_SetOutputLimits(&psu_cv_controller, HRTIM_PWM_DUTY_MIN, PSU_DUTY_MAX_NORMAL);
+  if (psu_power_stage_enabled == 0U) {
+    psu_set_power_stage(1U);
   }
+}
+
+void PSU_Service(void)
+{
+  if (psu_shutdown_pending == 0U) {
+    return;
+  }
+
+  psu_shutdown_pending = 0U;
+  HRTIM_PWM_Stop();
+  psu_stop_adc_dma();
 }
 
 float PSU_GetMeasuredVoltage(void)
@@ -233,7 +371,7 @@ float PSU_GetTargetVoltage(void)
 
 float PSU_GetSoftStartVoltage(void)
 {
-  return psu_ref_adc_ramp_v / POWER_VOUT_GAIN;
+  return psu_slewed_voltage_v;
 }
 
 void PSU_AdcDmaIrqHandler(void)

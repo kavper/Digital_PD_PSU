@@ -19,6 +19,7 @@ void PSU_Stop(void);
 void PSU_SetVoltage(float voltage_v);
 void PSU_ControlLoopFromAdc(const uint16_t adc_samples[PSU_ADC_CHANNEL_COUNT]);
 void PSU_AdcDmaIrqHandler(void);
+void PSU_Service(void);
 float PSU_GetMeasuredVoltage(void);
 float PSU_GetMeasuredCurrent(void);
 float PSU_GetMeasuredInputVoltage(void);

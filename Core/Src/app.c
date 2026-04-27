@@ -32,6 +32,7 @@ void APP_Run() {
   }
 
   if (initialized) {
+    PSU_Service();
     GUI_Process();
   }
 }

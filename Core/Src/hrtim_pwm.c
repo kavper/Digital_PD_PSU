@@ -31,6 +31,11 @@ static uint32_t pwm_adc_trigger_from_cmp1(uint32_t cmp1)
 uint32_t HRTIM_PWM_DutyToTicks(float duty)
 {
   const float clamped = pwm_clamp(duty, HRTIM_PWM_DUTY_MIN, HRTIM_PWM_DUTY_MAX);
+
+  if (clamped <= 0.0f) {
+    return 0UL;
+  }
+
   uint32_t ticks = (uint32_t)(clamped * (float)HRTIM_PWM_PERIOD_TICKS);
 
   if (ticks < 3UL) {
@@ -77,6 +82,33 @@ void HRTIM_PWM_StopCounter(void)
   (void)HAL_HRTIM_WaveformCounterStop(pwm_hrtim, HRTIM_TIMERID_TIMER_D);
 }
 
+void HRTIM_PWM_EnableOutputs(void)
+{
+  if (pwm_hrtim == 0) {
+    return;
+  }
+
+  (void)HAL_HRTIM_WaveformOutputStart(pwm_hrtim, HRTIM_OUTPUT_TD1 | HRTIM_OUTPUT_TD2);
+}
+
+void HRTIM_PWM_DisableOutputs(void)
+{
+  if (pwm_hrtim == 0) {
+    return;
+  }
+
+  (void)HAL_HRTIM_WaveformOutputStop(pwm_hrtim, HRTIM_OUTPUT_TD1 | HRTIM_OUTPUT_TD2);
+}
+
+void HRTIM_PWM_ForceUpdate(void)
+{
+  if (pwm_hrtim == 0) {
+    return;
+  }
+
+  (void)HAL_HRTIM_SoftwareUpdate(pwm_hrtim, HRTIM_TIMERUPDATE_D);
+}
+
 void HRTIM_PWM_Start(void)
 {
   if (pwm_hrtim == 0) {
@@ -84,7 +116,7 @@ void HRTIM_PWM_Start(void)
   }
 
   HRTIM_PWM_StartCounter();
-  (void)HAL_HRTIM_WaveformOutputStart(pwm_hrtim, HRTIM_OUTPUT_TD1 | HRTIM_OUTPUT_TD2);
+  HRTIM_PWM_EnableOutputs();
 }
 
 void HRTIM_PWM_Stop(void)
@@ -95,7 +127,7 @@ void HRTIM_PWM_Stop(void)
 
   HRTIM_PWM_SetDuty(HRTIM_PWM_DUTY_MIN);
   (void)HAL_HRTIM_SoftwareUpdate(pwm_hrtim, HRTIM_TIMERUPDATE_D);
-  (void)HAL_HRTIM_WaveformOutputStop(pwm_hrtim, HRTIM_OUTPUT_TD1 | HRTIM_OUTPUT_TD2);
+  HRTIM_PWM_DisableOutputs();
   HRTIM_PWM_StopCounter();
 }
 

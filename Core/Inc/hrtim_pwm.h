@@ -6,7 +6,11 @@
 #define HRTIM_PWM_FSW_HZ        (200000UL)
 #define HRTIM_PWM_TIMER_CLOCK_HZ (5440000000ULL)
 #define HRTIM_PWM_PERIOD_TICKS  (27200UL)
-#define HRTIM_PWM_DUTY_MIN      (0.02f)
+/*
+ * Allow true low-voltage operation. The PSU layer disables the power stage
+ * for a 0 V setpoint, while nonzero low setpoints may use very small duty.
+ */
+#define HRTIM_PWM_DUTY_MIN      (0.0f)
 #define HRTIM_PWM_DUTY_MAX      (0.80f)
 
 #ifndef HRTIM_PWM_DEBUG_ISR_GPIO
@@ -26,6 +30,9 @@
 void HRTIM_PWM_Init(HRTIM_HandleTypeDef *hhrtim);
 void HRTIM_PWM_StartCounter(void);
 void HRTIM_PWM_StopCounter(void);
+void HRTIM_PWM_EnableOutputs(void);
+void HRTIM_PWM_DisableOutputs(void);
+void HRTIM_PWM_ForceUpdate(void);
 void HRTIM_PWM_Start(void);
 void HRTIM_PWM_Stop(void);
 void HRTIM_PWM_SetDuty(float duty);
