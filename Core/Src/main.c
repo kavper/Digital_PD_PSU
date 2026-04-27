@@ -22,7 +22,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "app.h"
-#include "pid.h"
+#include "psu_config.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/

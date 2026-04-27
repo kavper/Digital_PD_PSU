@@ -12,6 +12,7 @@
  */
 #define HRTIM_PWM_DUTY_MIN      (0.0f)
 #define HRTIM_PWM_DUTY_MAX      (0.80f)
+#define HRTIM_PWM_MIN_EVENT_GAP_TICKS (3UL)
 
 #ifndef HRTIM_PWM_DEBUG_ISR_GPIO
 #define HRTIM_PWM_DEBUG_ISR_GPIO 0
@@ -32,6 +33,7 @@ void HRTIM_PWM_StartCounter(void);
 void HRTIM_PWM_StopCounter(void);
 void HRTIM_PWM_EnableOutputs(void);
 void HRTIM_PWM_DisableOutputs(void);
+void HRTIM_PWM_EnableLowSideOnly(void);
 void HRTIM_PWM_ForceUpdate(void);
 void HRTIM_PWM_Start(void);
 void HRTIM_PWM_Stop(void);

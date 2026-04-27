@@ -3,7 +3,7 @@
 #include "app_power.h"
 #include "logo.h"
 #include "main.h"
-#include "pid.h"
+#include "psu_gui_api.h"
 #include "ssd1306.h"
 #include "ssd1306_fonts.h"
 #include <math.h>
@@ -34,8 +34,8 @@ static volatile uint32_t onoff_last_ms = 0;
 static volatile uint32_t aux1_last_ms = 0;
 static volatile uint32_t aux2_last_ms = 0;
 static uint32_t last_manual_focus_ms = 0;
-static uint8_t pid_focus_pending = 0;
-static PID_ControlMode_t last_pid_mode = PID_CONTROL_MODE_CV;
+static uint8_t control_focus_pending = 0;
+static PSU_GuiControlMode_t last_control_mode = PSU_GUI_CONTROL_MODE_CV;
 
 static inline void debounce_set_flag_when_pressed(volatile uint8_t *flag,
                                                   volatile uint32_t *last_ms,
@@ -71,14 +71,14 @@ static inline float GUI_FilterVout(float prev, float in) {
   return prev + GUI_FILTER_ALPHA * (cand - prev);
 }
 
-static PID_ControlMode_t GUI_GetDisplayControlMode(void) {
-  PID_ControlMode_t mode = PID_GetControlMode();
+static PSU_GuiControlMode_t GUI_GetDisplayControlMode(void) {
+  PSU_GuiControlMode_t mode = PSU_GuiGetControlMode();
 
-  if (mode == PID_CONTROL_MODE_CC) {
-    return PID_CONTROL_MODE_CC;
+  if (mode == PSU_GUI_CONTROL_MODE_CC) {
+    return PSU_GUI_CONTROL_MODE_CC;
   }
 
-  return PID_CONTROL_MODE_CV;
+  return PSU_GUI_CONTROL_MODE_CV;
 }
 
 static uint8_t enc_synced = 0;
@@ -110,8 +110,8 @@ static uint8_t edit_pos = 0;
 
 static uint8_t GUI_ReadEncoderAB(void);
 
-static uint8_t GUI_GetUnitsCursorForMode(PID_ControlMode_t mode) {
-  return (mode == PID_CONTROL_MODE_CC) ? 5u : 1u;
+static uint8_t GUI_GetUnitsCursorForMode(PSU_GuiControlMode_t mode) {
+  return (mode == PSU_GUI_CONTROL_MODE_CC) ? 5u : 1u;
 }
 
 static void GUI_HoldManualFocus(void) {
@@ -124,7 +124,7 @@ static void GUI_SetEditSelection(uint8_t new_edit_pos) {
   gui_force_redraw = 1u;
 }
 
-static void GUI_ApplyAutoFocus(PID_ControlMode_t mode) {
+static void GUI_ApplyAutoFocus(PSU_GuiControlMode_t mode) {
   GUI_SetEditSelection(GUI_GetUnitsCursorForMode(mode));
   enc_last = TIM1->CNT / 4;
   enc_gpio_last = GUI_ReadEncoderAB();
@@ -260,8 +260,8 @@ static void GUI_SetOutputEnabled(bool en) {
     output_enabled = false;
     gui_force_redraw = 1u;
 
-    PID_SetTargetVoltage(0.0f);
-    PID_SetTargetCurrent(i_target_local); /* limit prądu zostaje */
+    PSU_GuiSetTargetVoltage(0.0f);
+    PSU_GuiSetTargetCurrent(i_target_local); /* limit prądu zostaje */
     PSU_Stop();
     return;
   }
@@ -269,8 +269,8 @@ static void GUI_SetOutputEnabled(bool en) {
   output_enabled = true;
   gui_force_redraw = 1u;
 
-  PID_SetTargetVoltage(v_target_local);
-  PID_SetTargetCurrent(i_target_local);
+  PSU_GuiSetTargetVoltage(v_target_local);
+  PSU_GuiSetTargetCurrent(i_target_local);
   PSU_Start();
 }
 
@@ -353,8 +353,8 @@ static void GUI_HandleEncoder(void) {
     if (v_target_local > 30.0f)
       v_target_local = 30.0f;
 
-    /* zawsze aktualizuj PID target */
-    PID_SetTargetVoltage(v_target_local);
+    /* zawsze aktualizuj PSU target */
+    PSU_GuiSetTargetVoltage(v_target_local);
 
   } else if (edit_pos < 8) {
     float step = EDIT_STEPS[edit_pos - 4];
@@ -365,7 +365,7 @@ static void GUI_HandleEncoder(void) {
     if (i_target_local > 10.0f)
       i_target_local = 10.0f;
 
-    PID_SetTargetCurrent(i_target_local);
+    PSU_GuiSetTargetCurrent(i_target_local);
   }
 }
 
@@ -374,14 +374,14 @@ static void GUI_HandleEncoder(void) {
 static void GUI_DrawMain(void) {
   char buf[32];
   ssd1306_Fill(Black);
-  PID_ControlMode_t pid_mode = GUI_GetDisplayControlMode();
+  PSU_GuiControlMode_t control_mode = GUI_GetDisplayControlMode();
   const bool psu_output_enabled = (PSU_IsRunning() != 0U);
 
   output_enabled = psu_output_enabled;
 
-  float v_out_raw = PID_GetVOut();
-  float i_out_raw = PID_GetIOut();
-  float v_in_raw = PID_GetVIn();
+  float v_out_raw = PSU_GuiGetOutputVoltage();
+  float i_out_raw = PSU_GuiGetOutputCurrent();
+  float v_in_raw = PSU_GuiGetInputVoltage();
 
   // Napięcie na ekranie jest lekko wygładzone dla czytelności.
   v_out = GUI_FilterVout(v_out, v_out_raw);
@@ -392,7 +392,7 @@ static void GUI_DrawMain(void) {
   float v_display = v_target_local;
   float i_display = i_target_local;
 
-  int pwm_percent = (int)(PID_GetPWM() * 100.0f);
+  int pwm_percent = (int)(PSU_GuiGetDuty() * 100.0f);
 
   ssd1306_SetCursor(2, 2);
   snprintf(buf, sizeof(buf), "IN: %d.%dV", INT_P(v_in), FRAC_P(v_in) / 10);
@@ -433,10 +433,10 @@ static void GUI_DrawMain(void) {
   ssd1306_Line(64, 85, 64, 128, White);
 
   const bool active_v_box =
-      (gui_mode == GUI_VIEW) ? (pid_mode != PID_CONTROL_MODE_CC)
+      (gui_mode == GUI_VIEW) ? (control_mode != PSU_GUI_CONTROL_MODE_CC)
                              : (gui_mode == GUI_EDIT_V);
   const bool active_i_box =
-      (gui_mode == GUI_VIEW) ? (pid_mode == PID_CONTROL_MODE_CC)
+      (gui_mode == GUI_VIEW) ? (control_mode == PSU_GUI_CONTROL_MODE_CC)
                              : (gui_mode == GUI_EDIT_I);
 
   SSD1306_COLOR  txt_v;
@@ -466,7 +466,7 @@ static void GUI_DrawMain(void) {
 
   if (active_v_box) {
     uint8_t v_cursor =
-        (gui_mode == GUI_EDIT_V) ? edit_pos : GUI_GetUnitsCursorForMode(pid_mode);
+        (gui_mode == GUI_EDIT_V) ? edit_pos : GUI_GetUnitsCursorForMode(control_mode);
     GUI_DrawDigitUnderline(10, 123, v_cursor, txt_v);
   }
 
@@ -480,7 +480,7 @@ static void GUI_DrawMain(void) {
   if (active_i_box) {
     uint8_t i_cursor = (gui_mode == GUI_EDIT_I)
                            ? (edit_pos - 4u)
-                           : (GUI_GetUnitsCursorForMode(pid_mode) - 4u);
+                           : (GUI_GetUnitsCursorForMode(control_mode) - 4u);
     GUI_DrawDigitUnderline(74, 123, i_cursor, txt_i);
   }
 
@@ -511,14 +511,14 @@ void GUI_Init(void) {
   v_target_local = 0.0f;
   i_target_local = 1.0f;
 
-  PID_SetTargetVoltage(v_target_local);
-  PID_SetTargetCurrent(i_target_local);
+  PSU_GuiSetTargetVoltage(v_target_local);
+  PSU_GuiSetTargetCurrent(i_target_local);
 
   gui_mode = GUI_VIEW;
   edit_pos = GUI_GetUnitsCursorForMode(GUI_GetDisplayControlMode());
   last_manual_focus_ms = 0u;
-  pid_focus_pending = 0u;
-  last_pid_mode = GUI_GetDisplayControlMode();
+  control_focus_pending = 0u;
+  last_control_mode = GUI_GetDisplayControlMode();
 
   /* HARD OFF na starcie */
   GUI_SetOutputEnabled(false);
@@ -527,7 +527,7 @@ void GUI_Init(void) {
 void GUI_Process(void) {
   static uint32_t last_draw_ms = 0;
   uint32_t now = HAL_GetTick();
-  PID_ControlMode_t pid_mode = GUI_GetDisplayControlMode();
+  PSU_GuiControlMode_t control_mode = GUI_GetDisplayControlMode();
   bool psu_output_enabled = (PSU_IsRunning() != 0U);
 
   if (output_enabled != psu_output_enabled) {
@@ -575,17 +575,17 @@ void GUI_Process(void) {
     /* Dla pewności: startowe nastawy, żeby GUI nie pokazało śmieci */
     v_target_local = 0.0f;
     i_target_local = 1.0f;
-    PID_SetTargetVoltage(v_target_local);
-    PID_SetTargetCurrent(i_target_local);
+    PSU_GuiSetTargetVoltage(v_target_local);
+    PSU_GuiSetTargetCurrent(i_target_local);
 
     /* Twardo OFF */
     HAL_GPIO_WritePin(DRV_EN_GPIO_Port, DRV_EN_Pin, GPIO_PIN_RESET);
     output_enabled = false;
     gui_force_redraw = 1u;
     last_manual_focus_ms = now;
-    pid_focus_pending = 0u;
-    last_pid_mode = pid_mode;
-    edit_pos = GUI_GetUnitsCursorForMode(pid_mode);
+    control_focus_pending = 0u;
+    last_control_mode = control_mode;
+    edit_pos = GUI_GetUnitsCursorForMode(control_mode);
 
     /* I tyle. Wracamy, żeby nic nie ruszyć w tym cyklu. */
     return;
@@ -603,15 +603,15 @@ void GUI_Process(void) {
 
   /* Edycja pozycji cyfry */
   if (gui_mode == GUI_VIEW) {
-    edit_pos = GUI_GetUnitsCursorForMode(pid_mode);
-    pid_focus_pending = 0u;
+    edit_pos = GUI_GetUnitsCursorForMode(control_mode);
+    control_focus_pending = 0u;
 
     if (aux1_click || aux2_click) {
-      /* UWAGA: nie bierz PID_GetCurrentSetpoint() bo to robi “SET 30V” */
-      v_target_local = PID_GetTargetVoltage();
-      i_target_local = PID_GetTargetCurrent();
+      /* Edycja ma wracac do nastawy z GUI, nie do chwilowej wartosci rampy. */
+      v_target_local = PSU_GuiGetTargetVoltage();
+      i_target_local = PSU_GuiGetTargetCurrent();
 
-      GUI_ApplyAutoFocus(pid_mode);
+      GUI_ApplyAutoFocus(control_mode);
       GUI_HoldManualFocus();
       gui_force_redraw = 1u;
       aux1_click = 0;
@@ -631,18 +631,18 @@ void GUI_Process(void) {
       aux2_click = 0;
     }
 
-    if (pid_mode != last_pid_mode) {
-      pid_focus_pending = 1u;
+    if (control_mode != last_control_mode) {
+      control_focus_pending = 1u;
     }
 
-    if (pid_focus_pending &&
+    if (control_focus_pending &&
         ((uint32_t)(now - last_manual_focus_ms) >= GUI_MODE_AUTOFOLLOW_MS)) {
-      GUI_ApplyAutoFocus(pid_mode);
-      pid_focus_pending = 0u;
+      GUI_ApplyAutoFocus(control_mode);
+      control_focus_pending = 0u;
     }
   }
 
-  last_pid_mode = pid_mode;
+  last_control_mode = control_mode;
 
   if ((gui_force_redraw == 0u) &&
       ((HAL_GetTick() - last_draw_ms) < GUI_REDRAW_PERIOD_MS)) {

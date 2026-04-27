@@ -50,8 +50,8 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/Src/control_2p2z.c
     Core/Src/gui.c
     Core/Src/hrtim_pwm.c
-    Core/Src/pid.c
     Core/Src/power_measurement.c
+    Core/Src/psu_gui_api.c
     
     Drivers/ssd1306/ssd1306.c
     Drivers/ssd1306/ssd1306_fonts.c

@@ -55,6 +55,22 @@ void DF22_SetOutputLimits(DF22_Controller_t *ctrl, float out_min, float out_max)
   ctrl->out_max = out_max;
 }
 
+void DF22_PresetOutput(DF22_Controller_t *ctrl, float output)
+{
+  if (ctrl == 0) {
+    return;
+  }
+
+  const float clamped = df22_clamp(output, ctrl->out_min, ctrl->out_max);
+
+  /*
+   * DF22 direct-form state for steady output at zero error:
+   * out=x1 and x2=-a2*out for the current denominator.
+   */
+  ctrl->x1 = clamped;
+  ctrl->x2 = -ctrl->a2 * clamped;
+}
+
 float DF22_Update(DF22_Controller_t *ctrl, float error)
 {
   if (ctrl == 0) {

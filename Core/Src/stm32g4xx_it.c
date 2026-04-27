@@ -277,7 +277,6 @@ void ADC1_2_IRQHandler(void)
 {
   /* USER CODE BEGIN ADC1_2_IRQn 0 */
   // HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, 0);
-  // PID_HandleInterrupt();
   /* USER CODE END ADC1_2_IRQn 0 */
   HAL_ADC_IRQHandler(&hadc1);
   /* USER CODE BEGIN ADC1_2_IRQn 1 */

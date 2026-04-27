@@ -2,6 +2,12 @@
 
 static HRTIM_HandleTypeDef *pwm_hrtim = 0;
 static float pwm_duty = HRTIM_PWM_DUTY_MIN;
+static uint8_t pwm_adc_sample_high_side_window = 0U;
+
+#define HRTIM_PWM_ADC_LOW_TO_HIGH_TICKS \
+  ((HRTIM_PWM_PERIOD_TICKS * 55UL) / 100UL)
+#define HRTIM_PWM_ADC_HIGH_TO_LOW_TICKS \
+  ((HRTIM_PWM_PERIOD_TICKS * 45UL) / 100UL)
 
 static float pwm_clamp(float value, float min_value, float max_value)
 {
@@ -14,18 +20,47 @@ static float pwm_clamp(float value, float min_value, float max_value)
   return value;
 }
 
-static uint32_t pwm_adc_trigger_from_cmp1(uint32_t cmp1)
+static uint32_t pwm_adc_trigger_clamp(uint32_t cmp3)
 {
-  uint32_t cmp3 = cmp1 + ((HRTIM_PWM_PERIOD_TICKS - cmp1) / 2UL);
-
-  if (cmp3 >= (HRTIM_PWM_PERIOD_TICKS - 3UL)) {
-    cmp3 = HRTIM_PWM_PERIOD_TICKS - 3UL;
+  if (cmp3 >= (HRTIM_PWM_PERIOD_TICKS - HRTIM_PWM_MIN_EVENT_GAP_TICKS)) {
+    cmp3 = HRTIM_PWM_PERIOD_TICKS - HRTIM_PWM_MIN_EVENT_GAP_TICKS;
   }
-  if (cmp3 < 3UL) {
-    cmp3 = 3UL;
+  if (cmp3 < HRTIM_PWM_MIN_EVENT_GAP_TICKS) {
+    cmp3 = HRTIM_PWM_MIN_EVENT_GAP_TICKS;
   }
 
   return cmp3;
+}
+
+static uint32_t pwm_adc_trigger_from_cmp1(uint32_t cmp1)
+{
+  if ((cmp1 == 0UL) || (cmp1 >= HRTIM_PWM_PERIOD_TICKS)) {
+    return pwm_adc_trigger_clamp(HRTIM_PWM_PERIOD_TICKS / 2UL);
+  }
+
+  /*
+   * Sample in the middle of the longer quiet PWM window.
+   *
+   * TD2/PB15 high-side is active from period event to CMP1.
+   * TD1/PB14 low-side is active from CMP1 to period event.
+   *
+   * For duty <~50% the low-side/off window is longer, so trigger after CMP1.
+   * For duty >~50% the high-side/on window is longer, so trigger before CMP1.
+   * 45/55% hysteresis avoids ADC phase chatter around exactly 50% duty.
+   */
+  if (pwm_adc_sample_high_side_window != 0U) {
+    if (cmp1 < HRTIM_PWM_ADC_HIGH_TO_LOW_TICKS) {
+      pwm_adc_sample_high_side_window = 0U;
+    }
+  } else if (cmp1 > HRTIM_PWM_ADC_LOW_TO_HIGH_TICKS) {
+    pwm_adc_sample_high_side_window = 1U;
+  }
+
+  if (pwm_adc_sample_high_side_window != 0U) {
+    return pwm_adc_trigger_clamp(cmp1 / 2UL);
+  }
+
+  return pwm_adc_trigger_clamp(cmp1 + ((HRTIM_PWM_PERIOD_TICKS - cmp1) / 2UL));
 }
 
 uint32_t HRTIM_PWM_DutyToTicks(float duty)
@@ -38,11 +73,11 @@ uint32_t HRTIM_PWM_DutyToTicks(float duty)
 
   uint32_t ticks = (uint32_t)(clamped * (float)HRTIM_PWM_PERIOD_TICKS);
 
-  if (ticks < 3UL) {
-    ticks = 3UL;
+  if (ticks < HRTIM_PWM_MIN_EVENT_GAP_TICKS) {
+    ticks = HRTIM_PWM_MIN_EVENT_GAP_TICKS;
   }
-  if (ticks > (HRTIM_PWM_PERIOD_TICKS - 3UL)) {
-    ticks = HRTIM_PWM_PERIOD_TICKS - 3UL;
+  if (ticks > (HRTIM_PWM_PERIOD_TICKS - HRTIM_PWM_MIN_EVENT_GAP_TICKS)) {
+    ticks = HRTIM_PWM_PERIOD_TICKS - HRTIM_PWM_MIN_EVENT_GAP_TICKS;
   }
 
   return ticks;
@@ -57,6 +92,7 @@ void HRTIM_PWM_Init(HRTIM_HandleTypeDef *hhrtim)
 {
   pwm_hrtim = hhrtim;
   pwm_duty = HRTIM_PWM_DUTY_MIN;
+  pwm_adc_sample_high_side_window = 0U;
   HRTIM_PWM_SetDuty(pwm_duty);
 
   if (pwm_hrtim != 0) {
@@ -98,6 +134,17 @@ void HRTIM_PWM_DisableOutputs(void)
   }
 
   (void)HAL_HRTIM_WaveformOutputStop(pwm_hrtim, HRTIM_OUTPUT_TD1 | HRTIM_OUTPUT_TD2);
+}
+
+void HRTIM_PWM_EnableLowSideOnly(void)
+{
+  if (pwm_hrtim == 0) {
+    return;
+  }
+
+  /* Used only for explicit 0 V hold: high-side off, low-side pulls to GND. */
+  (void)HAL_HRTIM_WaveformOutputStop(pwm_hrtim, HRTIM_OUTPUT_TD2);
+  (void)HAL_HRTIM_WaveformOutputStart(pwm_hrtim, HRTIM_OUTPUT_TD1);
 }
 
 void HRTIM_PWM_ForceUpdate(void)

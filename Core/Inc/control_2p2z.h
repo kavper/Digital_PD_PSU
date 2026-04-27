@@ -24,6 +24,7 @@ void DF22_Init(DF22_Controller_t *ctrl,
                float out_max);
 void DF22_Reset(DF22_Controller_t *ctrl);
 void DF22_SetOutputLimits(DF22_Controller_t *ctrl, float out_min, float out_max);
+void DF22_PresetOutput(DF22_Controller_t *ctrl, float output);
 float DF22_Update(DF22_Controller_t *ctrl, float error);
 
 #endif /* CONTROL_2P2Z_H */

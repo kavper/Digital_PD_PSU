@@ -2,8 +2,8 @@
 #include "control_2p2z.h"
 #include "hrtim_pwm.h"
 #include "main.h"
-#include "pid.h"
 #include "power_measurement.h"
+#include "psu_config.h"
 #include "stm32g4xx_hal_adc.h"
 #include <stdint.h>
 
@@ -13,6 +13,10 @@
 #define PSU_DUTY_MAX_NORMAL      (0.80f)
 #define PSU_ZERO_SETPOINT_V      (0.01f)
 #define PSU_STAGE_DISABLE_V      (0.005f)
+#define PSU_ZERO_LOW_SIDE_HOLD   (1U)
+#define PSU_LOW_VOLTAGE_PRELOAD_MAX_V (0.30f)
+#define PSU_FEEDFORWARD_VIN_FALLBACK_V (20.0f)
+#define PSU_FEEDFORWARD_VIN_MIN_V (4.0f)
 /* 10 V step: ~200 ms up/down at the 50 kHz control rate. */
 #define PSU_SLEW_UP_V_PER_S      (50.0f)
 #define PSU_SLEW_DOWN_V_PER_S    (50.0f)
@@ -54,6 +58,15 @@ static volatile uint8_t psu_control_active = 0U;
 static volatile uint8_t psu_shutdown_pending = 0U;
 static uint8_t psu_adc_dma_running = 0U;
 static uint8_t psu_power_stage_enabled = 0U;
+static uint8_t psu_zero_hold_active = 0U;
+
+typedef enum {
+  PSU_PWM_MODE_OFF = 0,
+  PSU_PWM_MODE_SYNC,
+  PSU_PWM_MODE_LOW_SIDE_ONLY
+} PsuPwmMode_t;
+
+static PsuPwmMode_t psu_pwm_mode = PSU_PWM_MODE_OFF;
 
 static float psu_clamp(float value, float min_value, float max_value)
 {
@@ -70,6 +83,7 @@ static void psu_reset_control(float duty_max)
 {
   psu_slewed_voltage_v = 0.0f;
   psu_ref_adc_ramp_v = 0.0f;
+  psu_zero_hold_active = 0U;
   DF22_Reset(&psu_cv_controller);
   DF22_SetOutputLimits(&psu_cv_controller, HRTIM_PWM_DUTY_MIN, duty_max);
   HRTIM_PWM_SetDuty(HRTIM_PWM_DUTY_MIN);
@@ -77,6 +91,7 @@ static void psu_reset_control(float duty_max)
 
 static void psu_reset_controller_only(float duty_max)
 {
+  psu_zero_hold_active = 0U;
   DF22_Reset(&psu_cv_controller);
   DF22_SetOutputLimits(&psu_cv_controller, HRTIM_PWM_DUTY_MIN, duty_max);
   HRTIM_PWM_SetDuty(HRTIM_PWM_DUTY_MIN);
@@ -102,6 +117,83 @@ static void psu_set_power_stage(uint8_t enabled)
   HRTIM_PWM_ForceUpdate();
   HAL_GPIO_WritePin(DRV_EN_GPIO_Port, DRV_EN_Pin, GPIO_PIN_SET);
   psu_power_stage_enabled = 1U;
+}
+
+static void psu_set_pwm_mode(PsuPwmMode_t mode)
+{
+  if (psu_pwm_mode == mode) {
+    return;
+  }
+
+  switch (mode) {
+  case PSU_PWM_MODE_LOW_SIDE_ONLY:
+    HRTIM_PWM_EnableLowSideOnly();
+    break;
+  case PSU_PWM_MODE_SYNC:
+    HRTIM_PWM_EnableOutputs();
+    break;
+  case PSU_PWM_MODE_OFF:
+  default:
+    HRTIM_PWM_DisableOutputs();
+    mode = PSU_PWM_MODE_OFF;
+    break;
+  }
+
+  psu_pwm_mode = mode;
+}
+
+static void psu_enter_zero_low_side_hold(void)
+{
+#if PSU_ZERO_LOW_SIDE_HOLD
+  if (psu_zero_hold_active == 0U) {
+    /*
+     * Use low-side only while output is logically enabled and exactly 0 V is
+     * requested; PSU_Stop still turns DRV_EN off after ramp-down finishes.
+     */
+    psu_reset_controller_only(PSU_DUTY_MAX_START);
+    HRTIM_PWM_ForceUpdate();
+    psu_set_pwm_mode(PSU_PWM_MODE_LOW_SIDE_ONLY);
+    psu_zero_hold_active = 1U;
+  }
+
+  psu_set_power_stage(1U);
+#else
+  psu_reset_controller_only(PSU_DUTY_MAX_START);
+  HRTIM_PWM_ForceUpdate();
+  psu_set_power_stage(0U);
+#endif
+}
+
+static float psu_get_feedforward_vin(void)
+{
+  if (psu_measurements.vboost_v > PSU_FEEDFORWARD_VIN_MIN_V) {
+    return psu_measurements.vboost_v;
+  }
+
+  return PSU_FEEDFORWARD_VIN_FALLBACK_V;
+}
+
+static float psu_voltage_to_duty_feedforward(float voltage_v)
+{
+  const float vin_v = psu_get_feedforward_vin();
+
+  if (vin_v <= PSU_FEEDFORWARD_VIN_MIN_V) {
+    return HRTIM_PWM_DUTY_MIN;
+  }
+
+  return psu_clamp(voltage_v / vin_v, HRTIM_PWM_DUTY_MIN, PSU_DUTY_MAX_START);
+}
+
+static void psu_preload_low_voltage_start(float target_voltage_v)
+{
+  const float preload_voltage_v =
+      psu_clamp(target_voltage_v, 0.0f, PSU_LOW_VOLTAGE_PRELOAD_MAX_V);
+  const float preload_duty = psu_voltage_to_duty_feedforward(preload_voltage_v);
+
+  DF22_SetOutputLimits(&psu_cv_controller, HRTIM_PWM_DUTY_MIN, PSU_DUTY_MAX_START);
+  DF22_PresetOutput(&psu_cv_controller, preload_duty);
+  HRTIM_PWM_SetDuty(preload_duty);
+  HRTIM_PWM_ForceUpdate();
 }
 
 static void psu_start_adc_dma(void)
@@ -194,6 +286,8 @@ void PSU_Init(void)
   psu_shutdown_pending = 0U;
   psu_adc_dma_running = 0U;
   psu_power_stage_enabled = 0U;
+  psu_zero_hold_active = 0U;
+  psu_pwm_mode = PSU_PWM_MODE_OFF;
 
   DF22_Init(&psu_cv_controller,
             PSU_2P2Z_B0,
@@ -227,10 +321,8 @@ void PSU_Start(void)
     HRTIM_PWM_ForceUpdate();
     HRTIM_PWM_StartCounter();
     HRTIM_PWM_EnableOutputs();
-
-    if (psu_target_voltage_v > PSU_ZERO_SETPOINT_V) {
-      psu_set_power_stage(1U);
-    }
+    psu_pwm_mode = PSU_PWM_MODE_SYNC;
+    psu_set_power_stage(1U);
 
     psu_control_active = 1U;
   }
@@ -291,19 +383,16 @@ void PSU_ControlLoopFromAdc(const uint16_t adc_samples[PSU_ADC_CHANNEL_COUNT])
   if ((psu_running != 0U) &&
       (target_voltage_v <= PSU_ZERO_SETPOINT_V) &&
       (psu_slewed_voltage_v <= PSU_STAGE_DISABLE_V)) {
-    psu_reset_controller_only(PSU_DUTY_MAX_START);
-    HRTIM_PWM_ForceUpdate();
-    psu_set_power_stage(0U);
+    psu_enter_zero_low_side_hold();
     return;
   }
 
   if (psu_slewed_voltage_v <= PSU_STAGE_DISABLE_V) {
-    psu_reset_controller_only(PSU_DUTY_MAX_START);
-    HRTIM_PWM_ForceUpdate();
-
     if ((psu_running != 0U) && (target_voltage_v > PSU_ZERO_SETPOINT_V)) {
-      psu_set_power_stage(1U);
+      psu_enter_zero_low_side_hold();
     } else {
+      psu_reset_controller_only(PSU_DUTY_MAX_START);
+      HRTIM_PWM_ForceUpdate();
       psu_set_power_stage(0U);
     }
 
@@ -315,6 +404,14 @@ void PSU_ControlLoopFromAdc(const uint16_t adc_samples[PSU_ADC_CHANNEL_COUNT])
   if (psu_power_stage_enabled == 0U) {
     psu_reset_controller_only(PSU_DUTY_MAX_START);
   }
+
+  if (psu_zero_hold_active != 0U) {
+    psu_preload_low_voltage_start(psu_target_voltage_v);
+  }
+
+  psu_zero_hold_active = 0U;
+
+  psu_set_pwm_mode(PSU_PWM_MODE_SYNC);
 
   float duty_max = PSU_DUTY_MAX_START;
   if ((psu_running != 0U) &&
